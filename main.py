@@ -110,7 +110,11 @@ if not os.path.exists(HISTORY_FILE):
 @app.get("/", response_class=HTMLResponse)
 def read_root():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    possible_paths = [os.path.join(current_dir, "frontend", "index.html"), os.path.join(current_dir, "frontend", "index")]
+    possible_paths = [
+        os.path.join(current_dir, "frontend", "index.html"),
+        os.path.join(current_dir, "frontend", "math.html"),
+        os.path.join(current_dir, "frontend", "index"),
+    ]
     for path in possible_paths:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
