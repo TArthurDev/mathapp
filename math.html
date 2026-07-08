@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Math Competition Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+</head>
+<body class="bg-zinc-900 text-zinc-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="react">
+        const API_BASE_URL = window.location.origin;
+
+        function App() {
+            const [view, setView] = React.useState('login');
+            const [studentCode, setStudentCode] = React.useState('');
+            const [role, setRole] = React.useState('');
+            const [problems, setProblems] = React.useState([]);
+            const [currentProblemIdx, setCurrentProblemIdx] = React.useState(0);
+            const [textWork, setTextWork] = React.useState('');
+            const [loading, setLoading] = React.useState(false);
+            const [feedback, setFeedback] = React.useState(null);
+            const [performance, setPerformance] = React.useState(null);
+            const [error, setError] = React.useState('');
+            
+            // Operator specific scopes
+            const [studentOverview, setStudentOverview] = React.useState([]);
+            const [operatorScope, setOperatorScope] = React.useState('global'); // global, concepts, questions, students, student_detail
+            const [selectedStudent, setSelectedStudent] = React.useState(null);
+
+            const [addProblemForm, setAddProblemForm] = React.useState({
+                id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: ''
+            });
+            const [addProblemSuccess, setAddProblemSuccess] = React.useState('');
+
+            const fetchProblems = () => {
+                fetch(API_BASE_URL + '/api/problems')
+                    .then(res => res.json())
+                    .then(data => setProblems(data))
+                    .catch(() => setError('Failed to load problems.'));
+            };
+
+            React.useEffect(() => {
+                if (view === 'workspace' || view === 'operator_panel') {
+                    fetchProblems();
+                }
+            }, [view]);
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                setError('');
+                if (!studentCode) return;
+
+                fetch(API_BASE_URL + '/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ student_code: studentCode })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        setRole(data.role);
+                        if (data.role === 'operator') {
+                            loadOperatorPanel();
+                        } else {
+                            setView('workspace');
+                        }
+                    } else {
+                        setError('Invalid access code.');
+                    }
+                })
+                .catch(() => setError('Connection failed.'));
+            };
+
+            const handleSubmitSolution = () => {
+                setLoading(true);
+                setFeedback(null);
+                const currentProblemId = problems[currentProblemIdx]?.id || "prob1";
+
+                fetch(API_BASE_URL + '/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        problem_id: currentProblemId,
+                        student_code: studentCode,
+                        text_work: textWork
+                    })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    setFeedback(data);
+                    setLoading(false);
+                })
+                .catch(() => {
+                    setError('Submission failed.');
+                    setLoading(false);
+                });
+            };
+
+            const loadDashboard = () => {
+                fetch(API_BASE_URL + '/api/student/' + studentCode + '/performance')
+                    .then(res => res.json())
+                    .then(data => {
+                        setPerformance(data);
+                        setView('dashboard');
+                    });
+            };
+
+            const loadOperatorPanel = () => {
+                fetch(API_BASE_URL + '/api/operator/students')
+                    .then(res => res.json())
+                    .then(data => {
+                        setStudentOverview(data);
+                        setView('operator_panel');
+                    })
+                    .catch(() => setError('Failed to load telemetry dashboard.'));
+            };
+
+            const handleDeleteProblem = (id) => {
+                if (!confirm(`Are you sure you want to delete problem "${id}"? This is irreversible.`)) return;
+                
+                fetch(`${API_BASE_URL}/api/problems/${id}`, { method: 'DELETE' })
+                .then(res => res.json())
+                .then(() => {
+                    fetchProblems(); // reload problem lists
+                    loadOperatorPanel(); // reload raw submissions calculation matrix
+                })
+                .catch(() => setError('Failed to delete problem.'));
+            };
+
+            const handleAddProblemSubmit = (e) => {
+                e.preventDefault();
+                setLoading(true);
+                fetch(API_BASE_URL + '/api/problems', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(addProblemForm)
+                })
+                .then(res => res.json())
+                .then(() => {
+                    setAddProblemSuccess('Problem added!');
+                    setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '' });
+                    setLoading(false);
+                    fetchProblems();
+                })
+                .catch(() => {
+                    setError('Failed to add problem.');
+                    setLoading(false);
+                });
+            };
+
+            // ---- ANALYTICS ENGINES FOR ZOOM SCOPES ----
+            const computeGlobalMetrics = () => {
+                let totalSub = 0, cSum = 0, eSum = 0, jSum = 0;
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        totalSub++;
+                        cSum += sub.correctness_score;
+                        eSum += sub.explanation_score;
+                        jSum += sub.rigor_score;
+                    });
+                });
+                if (totalSub === 0) return { combined: 0, c: 0, e: 0, j: 0 };
+                return {
+                    combined: (((cSum + eSum + jSum) / 3) / totalSub).toFixed(1),
+                    c: (cSum / totalSub).toFixed(1),
+                    e: (eSum / totalSub).toFixed(1),
+                    j: (jSum / totalSub).toFixed(1)
+                };
+            };
+
+            const computeConceptMetrics = () => {
+                const map = {};
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        const prob = problems.find(p => p.id === sub.problem_id);
+                        const concept = prob ? prob.concept : "General Operations";
+                        if (!map[concept]) map[concept] = { total: 0, score: 0 };
+                        map[concept].total++;
+                        map[concept].score += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                    });
+                });
+                return Object.entries(map).map(([k, v]) => ({ name: k, avg: (v.score / v.total).toFixed(1) }));
+            };
+
+            const computeQuestionMetrics = () => {
+                return problems.map(p => {
+                    let total = 0, sum = 0;
+                    studentOverview.forEach(s => {
+                        s.submissions.forEach(sub => {
+                            if (sub.problem_id === p.id) {
+                                total++;
+                                sum += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                            }
+                        });
+                    });
+                    return { ...p, totalSubmissions: total, avgScore: total > 0 ? (sum / total).toFixed(1) : "N/A" };
+                });
+            };
+
+            const globalData = computeGlobalMetrics();
+
+            return (
+                <div className="max-w-5xl mx-auto p-6">
+                    <div className="flex justify-between items-center border-b border-zinc-800 pb-4 mb-8">
+                        <h1 className="text-xl font-bold tracking-tight text-indigo-400">∑ MathClub Tracker</h1>
+                        {view !== 'login' && (
+                            <div className="space-x-4">
+                                <button onClick={() => setView('workspace')} className="text-sm text-zinc-400 hover:text-white">Workspace</button>
+                                {role === 'student' && <button onClick={loadDashboard} className="text-sm text-zinc-400 hover:text-white">Dashboard</button>}
+                                {role === 'operator' && <button onClick={loadOperatorPanel} className="text-sm text-zinc-400 hover:text-white">Operator Control Room</button>}
+                                <button onClick={() => { setView('login'); setStudentCode(''); setRole(''); }} className="text-sm text-red-400">Logout</button>
+                            </div>
+                        )}
+                    </div>
+
+                    {error && <div className="bg-red-900/50 border border-red-500 p-3 rounded-lg mb-4 text-sm">{error}</div>}
+
+                    {view === 'login' && (
+                        <div className="max-w-md mx-auto mt-20 bg-zinc-800 border border-zinc-700 p-8 rounded-xl shadow-xl">
+                            <h2 className="text-lg font-semibold mb-2">Enter Access Code</h2>
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <input
+                                    type="text" placeholder="e.g., lukep" value={studentCode}
+                                    onChange={(e) => setStudentCode(e.target.value.toLowerCase().trim())}
+                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                />
+                                <button className="w-full bg-indigo-600 hover:bg-indigo-700 font-medium p-3 rounded-lg transition">Enter Suite</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {view === 'workspace' && problems.length > 0 && (
+                        <div className="space-y-6">
+                            <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl">
+                                <span className="bg-indigo-900/60 border border-indigo-700 px-3 py-1 rounded-full text-xs text-indigo-300 font-medium">
+                                    {problems[currentProblemIdx]?.concept}
+                                </span>
+                                <h2 className="text-xl font-semibold mt-3 mb-4">{problems[currentProblemIdx]?.title}</h2>
+                                <p className="text-zinc-300 text-lg leading-relaxed bg-zinc-900/50 p-4 rounded-lg border border-zinc-800">
+                                    {problems[currentProblemIdx]?.question}
+                                </p>
+                            </div>
+
+                            <textarea
+                                rows="5" placeholder="Type out your steps step-by-step..." value={textWork}
+                                onChange={(e) => setTextWork(e.target.value)}
+                                className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl text-white font-mono text-sm focus:outline-none"
+                            />
+
+                            <div className="flex justify-between items-center">
+                                <button onClick={() => setCurrentProblemIdx((prev) => (prev + 1) % problems.length)} className="text-sm text-zinc-400 hover:text-white">Skip Problem →</button>
+                                <button onClick={handleSubmitSolution} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg font-medium transition disabled:opacity-50">
+                                    {loading ? 'Evaluating...' : 'Submit Evaluation Work'}
+                                </button>
+                            </div>
+
+                            {feedback && (
+                                <div className="mt-4 p-4 bg-green-900/50 border border-green-500 rounded-lg">
+                                    <h3 className="font-semibold mb-2">Feedback</h3>
+                                    <p className="mb-2"><strong>Justification:</strong> {feedback.justification}</p>
+                                    <p className="mb-2"><strong>Hint:</strong> {feedback.tutor_hint}</p>
+                                    <div className="flex space-x-4">
+                                        <div>
+                                            <div className="text-sm font-medium">Correctness</div>
+                                            <div className="text-lg font-bold">{feedback.correctness_score}/10</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-medium">Explanation</div>
+                                            <div className="text-lg font-bold">{feedback.explanation_score}/10</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-medium">Rigor</div>
+                                            <div className="text-lg font-bold">{feedback.rigor_score}/10</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {view === 'operator_panel' && (
+                        <div className="grid grid-cols-4 gap-6">
+                            {/* SCOPE LENS SIDEBAR NAVIGATION */}
+                            <div className="bg-zinc-800 border border-zinc-700 p-4 rounded-xl space-y-2 h-fit">
+                                <h3 className="text-xs uppercase font-bold text-zinc-500 px-2 tracking-wider">Scope Resolution</h3>
+                                <button onClick={() => setOperatorScope('global')} className={`w-full text-left p-2 text-sm rounded ${operatorScope === 'global' ? 'bg-indigo-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-700'}`}>1. Super Broad Scope</button>
+                                <button onClick={() => setOperatorScope('concepts')} className={`w-full text-left p-2 text-sm rounded ${operatorScope === 'concepts' ? 'bg-indigo-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-700'}`}>2. Conceptual Scope</button>
+                                <button onClick={() => setOperatorScope('questions')} className={`w-full text-left p-2 text-sm rounded ${operatorScope === 'questions' ? 'bg-indigo-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-700'}`}>3. Question View / Deletion</button>
+                                <button onClick={() => setOperatorScope('students')} className={`w-full text-left p-2 text-sm rounded ${operatorScope === 'students' ? 'bg-indigo-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-700'}`}>4. Individual Students</button>
+                                <button onClick={() => setOperatorScope('add_problems')} className={`w-full text-left p-2 text-sm rounded ${operatorScope === 'add_problems' ? 'bg-indigo-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-700'}`}>Add Problems</button>
+                            </div>
+
+                            {/* MAIN DYNAMIC SCOPE DISPLAY */}
+                            <div className="col-span-3 space-y-6">
+                                {operatorScope === 'global' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-6">
+                                        <div>
+                                            <h2 className="text-xl font-bold">Scope Level 1: Super Broad Evaluation</h2>
+                                            <p className="text-sm text-zinc-400">Total absolute performance metrics compiled across all cohorts.</p>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4">
+                                            <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700 text-center">
+                                                <div className="text-3xl font-black text-indigo-400">{globalData.combined}/10</div>
+                                                <div className="text-xs font-semibold text-zinc-400 mt-1">Combined Metric</div>
+                                            </div>
+                                            <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700 text-center">
+                                                <div className="text-3xl font-black text-emerald-400">{globalData.c}/10</div>
+                                                <div className="text-xs font-semibold text-zinc-400 mt-1">Correctness</div>
+                                            </div>
+                                            <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700 text-center">
+                                                <div className="text-3xl font-black text-amber-400">{globalData.e}/10</div>
+                                                <div className="text-xs font-semibold text-zinc-400 mt-1">Explanation</div>
+                                            </div>
+                                            <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700 text-center">
+                                                <div className="text-3xl font-black text-cyan-400">{globalData.j}/10</div>
+                                                <div className="text-xs font-semibold text-zinc-400 mt-1">Justification</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'concepts' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-4">
+                                        <h2 className="text-xl font-bold">Scope Level 2: Target Concept Breakdown</h2>
+                                        <div className="space-y-3">
+                                            {computeConceptMetrics().map(c => (
+                                                <div key={c.name} className="flex justify-between items-center bg-zinc-900 border border-zinc-700 p-3 rounded-lg">
+                                                    <span className="font-medium text-zinc-200">{c.name}</span>
+                                                    <span className="px-3 py-1 bg-zinc-800 rounded-lg text-indigo-400 font-bold">{c.avg} / 10</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'questions' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl">
+                                        <h2 className="text-xl font-bold">Scope Level 3: Question View / Deletion</h2>
+                                        <p className="text-sm text-zinc-400 mb-4">Manage individual competition problems. Select a problem to view its details or delete it permanently.</p>
+                                        <div className="space-y-4">
+                                            {problems.map(problem => (
+                                                <div key={problem.id} className="flex justify-between items-center bg-zinc-900 border border-zinc-700 p-4 rounded-lg">
+                                                    <div className="flex-1 min-w-0">
+                                                        <h3 className="font-semibold text-zinc-200">{problem.title}</h3>
+                                                        <p className="text-sm text-zinc-400 truncate">{problem.question}</p>
+                                                    </div>
+                                                    <div className="text-right space-y-1">
+                                                        <span className="text-xs text-indigo-400">{problem.concept}</span>
+                                                        <button onClick={() => handleDeleteProblem(problem.id)} className="text-sm text-red-400 hover:text-red-200 hover:underline">Delete</button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'students' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl">
+                                        <h2 className="text-xl font-bold">Scope Level 4: Individual Students</h2>
+                                        <p className="text-sm text-zinc-400 mb-4">Individual student performance breakdown across all attempted problems.</p>
+                                        {studentOverview.map(student => (
+                                            <div key={student.student_code} className="bg-zinc-900 border border-zinc-700 p-4 rounded-lg">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <h3 className="font-semibold text-zinc-200">{student.student_code}</h3>
+                                                        <p className="text-sm text-zinc-400">{student.total_attempts} problems attempted</p>
+                                                    </div>
+                                                    <div className="text-right space-y-1">
+                                                        <span className="px-3 py-1 bg-zinc-800 rounded-lg text-indigo-400 font-bold text-sm">
+                                                            {student.average_score}/10
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {operatorScope === 'add_problems' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-8 rounded-xl space-y-6">
+                                        <div>
+                                            <h2 className="text-xl font-bold">Add New Problem</h2>
+                                            <p className="text-sm text-zinc-400">Create a new competition problem with all required fields.</p>
+                                        </div>
+                                        <form onSubmit={handleAddProblemSubmit} className="space-y-6">
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Problem ID</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g., prob10"
+                                                    value={addProblemForm.id}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, id: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Title</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g., Quadratic Equation Challenge"
+                                                    value={addProblemForm.title}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, title: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Concept/Topic</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g., Quadratic Equations"
+                                                    value={addProblemForm.concept}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, concept: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Question Text</label>
+                                                <textarea
+                                                    placeholder="Enter the full problem statement here..."
+                                                    value={addProblemForm.question}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, question: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                    rows="4"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Official Answer</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g., x = 2 or x = -3"
+                                                    value={addProblemForm.official_answer}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, official_answer: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Image URL (Optional)</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g., https://example.com/diagram.png"
+                                                    value={addProblemForm.image_url}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, image_url: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-zinc-300 mb-2">Reference Solution / Text-Based Rubric</label>
+                                                <textarea
+                                                    placeholder="Provide a detailed solution or rubric for grading..."
+                                                    value={addProblemForm.reference_solution}
+                                                    onChange={(e) => setAddProblemForm({...addProblemForm, reference_solution: e.target.value})}
+                                                    className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                                                    rows="6"
+                                                />
+                                            </div>
+                                            <div className="flex justify-between items-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '' })}
+                                                    className="text-sm text-zinc-400 hover:text-white"
+                                                >
+                                                    Clear Form
+                                                </button>
+                                                <button
+                                                    type="submit"
+                                                    disabled={loading}
+                                                    className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg font-medium transition disabled:opacity-50"
+                                                >
+                                                    {loading ? 'Adding Problem...' : 'Add Problem'}
+                                                </button>
+                                            </div>
+                                            {addProblemSuccess && (
+                                                <div className="mt-4 bg-green-900/50 border border-green-500 p-3 rounded-lg text-sm text-green-300">
+                                                    {addProblemSuccess}
+                                                </div>
+                                            )}
+                                        </form>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'concepts' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-4">
+                                        <h2 className="text-xl font-bold">Scope Level 2: Target Concept Breakdown</h2>
+                                        <div className="space-y-3">
+                                            {computeConceptMetrics().map(c => (
+                                                <div key={c.name} className="flex justify-between items-center bg-zinc-900 border border-zinc-700 p-3 rounded-lg">
+                                                    <span className="font-medium text-zinc-200">{c.name}</span>
+                                                    <span className="px-3 py-1 bg-zinc-800 rounded-lg text-indigo-400 font-bold">{c.avg} / 10</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'questions' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-4">
+                                        <h2 className="text-xl font-bold">Scope Level 3: Question Repository & Telemetry</h2>
+                                        <p className="text-xs text-zinc-400">Review problem success parameters or delete outdated problems from active competition rosters.</p>
+                                        <div className="space-y-3">
+                                            {computeQuestionMetrics().map(p => (
+                                                <div key={p.id} className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl flex justify-between items-start gap-4">
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs font-mono bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded text-zinc-400">{p.id}</span>
+                                                            <h4 className="font-semibold">{p.title}</h4>
+                                                            <span className="text-xs text-indigo-300">({p.concept})</span>
+                                                        </div>
+                                                        <p className="text-sm text-zinc-400 line-clamp-2">{p.question}</p>
+                                                        <div className="text-xs text-zinc-500 pt-2">Average Score: <strong className="text-zinc-300">{p.avgScore}/10</strong> | Total Entries: <strong className="text-zinc-300">{p.totalSubmissions}</strong></div>
+                                                    </div>
+                                                    <button onClick={() => handleDeleteProblem(p.id)} className="bg-red-950 text-red-400 border border-red-900/50 hover:bg-red-950/80 px-3 py-1.5 rounded-lg text-xs font-medium transition shrink-0">
+                                                        Delete Asset
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'students' && (
+                                    <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-4">
+                                        <h2 className="text-xl font-bold">Scope Level 4: Student Selection Vector</h2>
+                                        <div className="space-y-3">
+                                            {studentOverview.map(s => (
+                                                <div key={s.student_code} onClick={() => { setSelectedStudent(s); setOperatorScope('student_detail'); }} className="bg-zinc-900 border border-zinc-700 hover:border-indigo-500 p-4 rounded-xl flex justify-between items-center cursor-pointer transition">
+                                                    <div>
+                                                        <h4 className="font-bold text-lg text-white capitalize">{s.student_code}</h4>
+                                                        <p className="text-xs text-zinc-500">Submissions Logged: {s.total_submissions}</p>
+                                                    </div>
+                                                    <div className="flex gap-4 text-xs">
+                                                        <div>Correctness: <strong className="text-emerald-400">{s.metric_breakdown.correctness}</strong></div>
+                                                        <div>Explanation: <strong className="text-amber-400">{s.metric_breakdown.explanation}</strong></div>
+                                                        <div>Justification: <strong className="text-cyan-400">{s.metric_breakdown.justification}</strong></div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'student_detail' && selectedStudent && (
+                                    <div className="space-y-4">
+                                        <button onClick={() => setOperatorScope('students')} className="text-xs text-indigo-400 hover:underline">← Return to Student Directory</button>
+                                        <div className="bg-zinc-800 border border-zinc-700 p-6 rounded-xl space-y-6">
+                                            <div className="border-b border-zinc-700 pb-4">
+                                                <h2 className="text-2xl font-black capitalize text-white">{selectedStudent.student_code}'s Performance Index</h2>
+                                            </div>
+                                            
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700">
+                                                    <h4 className="text-xs text-zinc-400 font-bold uppercase mb-2">Conceptual Competencies</h4>
+                                                    {Object.entries(selectedStudent.performance_metrics).map(([k,v]) => (
+                                                        <div key={k} className="flex justify-between text-sm py-1">
+                                                            <span>{k}</span><span className="font-bold text-indigo-400">{v}/10</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="bg-zinc-900 p-4 rounded-xl border border-zinc-700">
+                                                    <h4 className="text-xs text-zinc-400 font-bold uppercase mb-2">Structural Rubric Evaluation</h4>
+                                                    <div className="flex justify-between text-sm py-1"><span>Correctness Matrix</span><span className="font-bold text-emerald-400">{selectedStudent.metric_breakdown.correctness}/10</span></div>
+                                                    <div className="flex justify-between text-sm py-1"><span>Explanation Matrix</span><span className="font-bold text-amber-400">{selectedStudent.metric_breakdown.explanation}/10</span></div>
+                                                    <div className="flex justify-between text-sm py-1"><span>Justification Vector</span><span className="font-bold text-cyan-400">{selectedStudent.metric_breakdown.justification}/10</span></div>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <h3 className="font-bold text-sm text-zinc-400 uppercase tracking-wide mb-3">Problem-by-Problem Submissions</h3>
+                                                <div className="space-y-3">
+                                                    {selectedStudent.submissions.map((sub, i) => {
+                                                        const prob = problems.find(p => p.id === sub.problem_id);
+                                                        return (
+                                                            <div key={i} className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl space-y-2">
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="font-bold text-zinc-300">{prob ? prob.title : sub.problem_id}</span>
+                                                                    <span className="text-zinc-500">{new Date(sub.timestamp * 1000).toLocaleDateString()}</span>
+                                                                </div>
+                                                                <p className="text-xs font-mono bg-zinc-950 p-2 rounded text-zinc-400 whitespace-pre-wrap">{sub.text_work}</p>
+                                                                <div className="flex gap-4 text-xs pt-1 text-zinc-400">
+                                                                    <span>Correctness: <strong className="text-emerald-400">{sub.correctness_score}</strong></span>
+                                                                    <span>Explanation: <strong className="text-amber-400">{sub.explanation_score}</strong></span>
+                                                                    <span>Justification: <strong className="text-cyan-400">{sub.rigor_score}</strong></span>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
