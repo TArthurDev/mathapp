@@ -21,7 +21,8 @@
             const [role, setRole] = React.useState('');
             const [problems, setProblems] = React.useState([]);
             const [currentProblemIdx, setCurrentProblemIdx] = React.useState(0);
-            const [textWork, setTextWork] = React.useState('');
+            const [exactAnswer, setExactAnswer] = React.useState('');
+            const [explanation, setExplanation] = React.useState('');
             const [loading, setLoading] = React.useState(false);
             const [feedback, setFeedback] = React.useState(null);
             const [performance, setPerformance] = React.useState(null);
@@ -81,6 +82,16 @@
                 .catch(() => setError('Connection failed.'));
             };
 
+            const resetAnswerInputs = () => {
+                setExactAnswer('');
+                setExplanation('');
+            };
+
+            const handleRetry = () => {
+                setFeedback(null);
+                resetAnswerInputs();
+            };
+
             const handleSubmitSolution = () => {
                 setLoading(true);
                 setFeedback(null);
@@ -92,13 +103,15 @@
                     body: JSON.stringify({
                         problem_id: currentProblemId,
                         student_code: studentCode,
-                        text_work: textWork
+                        exact_answer: exactAnswer,
+                        explanation: explanation
                     })
                 })
                 .then(res => res.json())
                 .then(data => {
                     setFeedback(data);
                     setLoading(false);
+                    resetAnswerInputs();
                 })
                 .catch(() => {
                     setError('Submission failed.');
@@ -272,14 +285,27 @@
                                 </p>
                             </div>
 
-                            <textarea
-                                rows="5" placeholder="Type out your steps step-by-step..." value={textWork}
-                                onChange={(e) => setTextWork(e.target.value)}
-                                className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl text-white font-mono text-sm focus:outline-none"
-                            />
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="exact-answer" className="block text-sm font-medium text-zinc-300 mb-2">Final / Exact Answer</label>
+                                    <input
+                                        id="exact-answer" type="text" placeholder="e.g., 24" value={exactAnswer}
+                                        onChange={(e) => setExactAnswer(e.target.value)}
+                                        className="w-full bg-zinc-800 border border-zinc-700 p-3 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor="explanation-work" className="block text-sm font-medium text-zinc-300 mb-2">Your Explanation / Work</label>
+                                    <textarea
+                                        id="explanation-work" rows="5" placeholder="Type out your steps step-by-step..." value={explanation}
+                                        onChange={(e) => setExplanation(e.target.value)}
+                                        className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-indigo-500"
+                                    />
+                                </div>
+                            </div>
 
                             <div className="flex justify-between items-center">
-                                <button onClick={() => setCurrentProblemIdx((prev) => (prev + 1) % problems.length)} className="text-sm text-zinc-400 hover:text-white">Skip Problem →</button>
+                                <button onClick={() => { setCurrentProblemIdx((prev) => (prev + 1) % problems.length); setFeedback(null); resetAnswerInputs(); }} className="text-sm text-zinc-400 hover:text-white">Skip Problem →</button>
                                 <button onClick={handleSubmitSolution} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg font-medium transition disabled:opacity-50">
                                     {loading ? 'Evaluating...' : 'Submit Evaluation Work'}
                                 </button>
@@ -287,7 +313,10 @@
 
                             {feedback && (
                                 <div className="mt-4 p-4 bg-green-900/50 border border-green-500 rounded-lg">
-                                    <h3 className="font-semibold mb-2">Feedback</h3>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <h3 className="font-semibold">Feedback</h3>
+                                        <button onClick={handleRetry} className="bg-zinc-700 hover:bg-zinc-600 px-4 py-1.5 rounded-lg text-sm font-medium transition">Retry</button>
+                                    </div>
                                     <p className="mb-2"><strong>Justification:</strong> {feedback.justification}</p>
                                     <p className="mb-2"><strong>Hint:</strong> {feedback.tutor_hint}</p>
                                     <div className="flex space-x-4">
@@ -611,7 +640,10 @@
                                                                     <span className="font-bold text-zinc-300">{prob ? prob.title : sub.problem_id}</span>
                                                                     <span className="text-zinc-500">{new Date(sub.timestamp * 1000).toLocaleDateString()}</span>
                                                                 </div>
-                                                                <p className="text-xs font-mono bg-zinc-950 p-2 rounded text-zinc-400 whitespace-pre-wrap">{sub.text_work}</p>
+                                                                <div className="text-xs bg-zinc-950 p-2 rounded space-y-1">
+                                                                    <p className="text-zinc-300"><span className="text-zinc-500">Final Answer:</span> {sub.exact_answer || '—'}</p>
+                                                                    <p className="font-mono text-zinc-400 whitespace-pre-wrap">{sub.explanation || sub.text_work || ''}</p>
+                                                                </div>
                                                                 <div className="flex gap-4 text-xs pt-1 text-zinc-400">
                                                                     <span>Correctness: <strong className="text-emerald-400">{sub.correctness_score}</strong></span>
                                                                     <span>Explanation: <strong className="text-amber-400">{sub.explanation_score}</strong></span>
@@ -662,7 +694,10 @@
                                                     {sub.timestamp ? new Date(sub.timestamp * 1000).toLocaleString() : 'N/A'}
                                                 </span>
                                             </div>
-                                            <p className="text-xs font-mono bg-zinc-950 p-2 rounded text-zinc-400 whitespace-pre-wrap">{sub.text_work}</p>
+                                            <div className="text-xs bg-zinc-950 p-2 rounded space-y-1">
+                                                <p className="text-zinc-300"><span className="text-zinc-500">Final Answer:</span> {sub.exact_answer || '—'}</p>
+                                                <p className="font-mono text-zinc-400 whitespace-pre-wrap">{sub.explanation || sub.text_work || ''}</p>
+                                            </div>
                                             <div className="flex gap-4 text-xs pt-1 text-zinc-400">
                                                 <span>Correctness: <strong className="text-emerald-400">{sub.correctness_score}</strong></span>
                                                 <span>Explanation: <strong className="text-amber-400">{sub.explanation_score}</strong></span>
