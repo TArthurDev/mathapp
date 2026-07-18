@@ -60,7 +60,8 @@ class ProblemCreate(BaseModel):
 class SubmitRequest(BaseModel):
     problem_id: str
     student_code: str
-    text_work: str
+    exact_answer: str = ""
+    explanation: str = ""
 
 class SubmitResponse(BaseModel):
     correctness_score: float
@@ -208,8 +209,8 @@ async def submit_solution(request: SubmitRequest):
 Reference Solution / Rubric:
 {rubric}
 
-Student Solution:
-{request.text_work}"""
+Student's Final Answer: {request.exact_answer}
+Student's Explanation: {request.explanation}"""
 
         # Generate text using the chat completion API asynchronously
         # Parameters for deterministic output similar to temperature=0
@@ -264,7 +265,8 @@ Student Solution:
     submission_entry = {
         "student_code": request.student_code.lower().strip(),
         "problem_id": request.problem_id,
-        "text_work": request.text_work,
+        "exact_answer": request.exact_answer,
+        "explanation": request.explanation,
         "timestamp": time.time(),
         **feedback
     }
