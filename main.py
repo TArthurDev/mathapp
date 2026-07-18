@@ -293,6 +293,12 @@ def get_performance(student_code: str):
     averages = {c: round(sum(s)/len(s), 2) for c, s in concept_scores.items()}
     return PerformanceResponse(averages=averages, total_submissions=len(student_history))
 
+@app.get("/api/admin/submissions/{student_id}", response_model=List[Dict[str, Any]])
+def get_admin_submissions(student_id: str):
+    history = load_json(HISTORY_FILE, [])
+    student_code = student_id.lower().strip()
+    return [e for e in history if e.get("student_code") == student_code]
+
 @app.get("/api/operator/students", response_model=List[StudentOverview])
 def get_operator_student_overview():
     students = load_json(STUDENTS_FILE, [])
