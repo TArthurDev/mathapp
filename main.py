@@ -188,8 +188,9 @@ async def submit_solution(request: SubmitRequest):
 
         # System prompt instructing to output JSON in a markdown code block
         system_prompt_json = (
-            "You are a strict math competition judge. Given a student's solution text, the problem statement, "
-            "and the reference solution/rubric, score the student's work on three criteria: correctness, explanation, "
+            "You are a strict math competition judge. Given the student's final answer, their step-by-step explanation, "
+            "the problem statement, and the reference solution/rubric, evaluate the final answer against the explanation "
+            "and score the student's work on three criteria: correctness, explanation, "
             "and rigor/justification, each on a scale from 0 to 10. Provide a justification for the scores, pointing out "
             "any missing steps, errors, or missing explanations. Also provide a tutor hint that gives a conceptual hint "
             "without revealing the direct answer. Return ONLY a JSON object wrapped in a markdown code block like:\n"

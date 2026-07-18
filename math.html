@@ -285,37 +285,41 @@
                                 </p>
                             </div>
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label htmlFor="exact-answer" className="block text-sm font-medium text-zinc-300 mb-2">Final / Exact Answer</label>
-                                    <input
-                                        id="exact-answer" type="text" placeholder="e.g., 24" value={exactAnswer}
-                                        onChange={(e) => setExactAnswer(e.target.value)}
-                                        className="w-full bg-zinc-800 border border-zinc-700 p-3 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
-                                    />
-                                </div>
-                                <div>
-                                    <label htmlFor="explanation-work" className="block text-sm font-medium text-zinc-300 mb-2">Your Explanation / Work</label>
-                                    <textarea
-                                        id="explanation-work" rows="5" placeholder="Type out your steps step-by-step..." value={explanation}
-                                        onChange={(e) => setExplanation(e.target.value)}
-                                        className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-indigo-500"
-                                    />
-                                </div>
-                            </div>
+                            {!feedback && (
+                                <React.Fragment>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label htmlFor="exact-answer" className="block text-sm font-medium text-zinc-300 mb-2">Final / Exact Answer</label>
+                                            <input
+                                                id="exact-answer" type="text" placeholder="e.g., 24" value={exactAnswer}
+                                                onChange={(e) => setExactAnswer(e.target.value)}
+                                                className="w-full sm:max-w-xs bg-zinc-800 border border-zinc-700 px-3 py-2 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="explanation-work" className="block text-sm font-medium text-zinc-300 mb-2">Your Explanation / Work</label>
+                                            <textarea
+                                                id="explanation-work" rows="12" placeholder="Type out your steps step-by-step..." value={explanation}
+                                                onChange={(e) => setExplanation(e.target.value)}
+                                                className="w-full min-h-[16rem] bg-zinc-800 border border-zinc-700 p-4 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-indigo-500"
+                                            />
+                                        </div>
+                                    </div>
 
-                            <div className="flex justify-between items-center">
-                                <button onClick={() => { setCurrentProblemIdx((prev) => (prev + 1) % problems.length); setFeedback(null); resetAnswerInputs(); }} className="text-sm text-zinc-400 hover:text-white">Skip Problem →</button>
-                                <button onClick={handleSubmitSolution} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg font-medium transition disabled:opacity-50">
-                                    {loading ? 'Evaluating...' : 'Submit Evaluation Work'}
-                                </button>
-                            </div>
+                                    <div className="flex justify-between items-center">
+                                        <button onClick={() => { setCurrentProblemIdx((prev) => (prev + 1) % problems.length); setFeedback(null); resetAnswerInputs(); }} className="text-sm text-zinc-400 hover:text-white">Skip Problem →</button>
+                                        <button onClick={handleSubmitSolution} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg font-medium transition disabled:opacity-50">
+                                            {loading ? 'Evaluating...' : 'Submit Evaluation Work'}
+                                        </button>
+                                    </div>
+                                </React.Fragment>
+                            )}
 
                             {feedback && (
                                 <div className="mt-4 p-4 bg-green-900/50 border border-green-500 rounded-lg">
                                     <div className="flex justify-between items-center mb-2">
                                         <h3 className="font-semibold">Feedback</h3>
-                                        <button onClick={handleRetry} className="bg-zinc-700 hover:bg-zinc-600 px-4 py-1.5 rounded-lg text-sm font-medium transition">Retry</button>
+                                        <button onClick={handleRetry} className="bg-indigo-600 hover:bg-indigo-700 px-4 py-1.5 rounded-lg text-sm font-medium transition">Retry Question</button>
                                     </div>
                                     <p className="mb-2"><strong>Justification:</strong> {feedback.justification}</p>
                                     <p className="mb-2"><strong>Hint:</strong> {feedback.tutor_hint}</p>
