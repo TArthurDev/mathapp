@@ -1,352 +1,807 @@
-import json
-import os
-import time
-from datetime import datetime
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from fastapi.responses import HTMLResponse
-from typing import List, Dict, Any, Optional
-from huggingface_hub import AsyncInferenceClient
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Math Competition Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+</head>
+<body class="bg-zinc-900 text-zinc-100 min-h-screen">
+    <div id="root"></div>
 
-app = FastAPI(title="Math Competition Tracker API")
+    <script type="text/babel" data-presets="react">
+        const API_BASE_URL = window.location.origin;
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        function App() {
+            const [view, setView] = React.useState('login');
+            const [studentCode, setStudentCode] = React.useState('');
+            const [role, setRole] = React.useState('');
+            const [problems, setProblems] = React.useState([]);
+            const [currentQuestionIndex, setCurrentQuestionIndex] = React.useState(0);
+            const [exactAnswer, setExactAnswer] = React.useState('');
+            const [explanationWork, setExplanationWork] = React.useState('');
+            const textWork = explanationWork;
 
-DATA_DIR = "data"
-PROBLEMS_FILE = os.path.join(DATA_DIR, "seed_problems.json")
-STUDENTS_FILE = os.path.join(DATA_DIR, "students.json")
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+            const [loading, setLoading] = React.useState(false);
+            const [feedback, setFeedback] = React.useState(null);
 
-ACCESS_CODES = {
-    "lukep": "operator",
-    "sarahm": "student",
-    "alexw": "student"
-}
+            const [streak, setStreak] = React.useState(0);
+            const [submissionAttempts, setSubmissionAttempts] = React.useState({});
+            const [showComposer, setShowComposer] = React.useState(true);
+            const [completedProblemIds, setCompletedProblemIds] = React.useState([]);
+            const [isRetryPhase, setIsRetryPhase] = React.useState(false);
 
-os.makedirs(DATA_DIR, exist_ok=True)
+            const [correctProblemCount, setCorrectProblemCount] = React.useState(0);
+            const [sessionStats, setSessionStats] = React.useState({ totalAttempted: 0, totalCorrect: 0 });
+            const [performance, setPerformance] = React.useState(null);
+            const [error, setError] = React.useState('');
+            
+            const [studentOverview, setStudentOverview] = React.useState([]);
+            const [operatorScope, setOperatorScope] = React.useState('global');
+            const [selectedStudent, setSelectedStudent] = React.useState(null);
+            const [studentAudit, setStudentAudit] = React.useState([]);
 
-class LoginRequest(BaseModel):
-    student_code: str
+            const [addProblemForm, setAddProblemForm] = React.useState({
+                id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: ''
+            });
+            const [addProblemSuccess, setAddProblemSuccess] = React.useState('');
+            const [editingProblemId, setEditingProblemId] = React.useState(null);
+            const [editProblemForm, setEditProblemForm] = React.useState({
+                title: '', concept: '', question: '', rubric: '', lesson_link: '', url: ''
+            });
 
-class LoginResponse(BaseModel):
-    success: bool
-    message: str = ""
-    role: str = ""
+            const fetchProblems = () => {
+                return fetch(API_BASE_URL + '/api/problems')
+                    .then(res => {
+                        if (!res.ok) throw new Error('Failed to load problems');
+                        return res.json();
+                    })
+                    .then(data => {
+                        if (!Array.isArray(data)) throw new Error('Invalid problems payload');
+                        setProblems(data);
+                        return data;
+                    })
+                    .catch(() => {
+                        setError('Failed to load problems.');
+                        return [];
+                    });
+            };
 
-class Problem(BaseModel):
-    id: str
-    title: str
-    concept: str
-    question: str
-    official_answer: str = ""
-    rubric: str
-    image_url: Optional[str] = ""
+            React.useEffect(() => {
+                if (view === 'workspace' || view === 'operator_panel') {
+                    fetchProblems();
+                }
+            }, [view]);
 
-class ProblemCreate(BaseModel):
-    id: str
-    title: str
-    concept: str
-    question: str
-    image_url: Optional[str] = ""
-    reference_solution: str
+            const handleLogin = (e) => {
+                e.preventDefault();
+                setError('');
+                if (!studentCode) return;
 
-class SubmitRequest(BaseModel):
-    problem_id: str
-    student_code: str
-    exact_answer: str = ""
-    explanation: str = ""
+                fetch(API_BASE_URL + '/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ student_code: studentCode })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        setRole(data.role);
+                        if (data.role === 'operator') {
+                            loadOperatorPanel();
+                        } else {
+                            setView('workspace');
+                        }
+                    } else {
+                        setError('Invalid access code.');
+                    }
+                })
+                .catch(() => setError('Connection failed.'));
+            };
 
-class SubmitResponse(BaseModel):
-    correctness_score: float
-    explanation_score: float
-    rigor_score: float
-    justification: str
-    tutor_hint: str
+            const handleSubmitSolution = () => {
+                setLoading(true);
+                setFeedback(null);
+                setExactAnswer('');
+                setExplanationWork('');
+                setShowComposer(false);
 
-class PerformanceResponse(BaseModel):
-    averages: Dict[str, float]
-    total_submissions: int
+                const currentProblemId = problems[currentQuestionIndex]?.id || "prob1";
+                const currentAttemptCount = submissionAttempts[currentQuestionIndex] || 0;
+                const nextAttemptCount = currentAttemptCount + 1;
 
-# Expanded schema to feed our new multi-layered dashboard
-class StudentOverview(BaseModel):
-    student_code: str
-    performance_metrics: Dict[str, float]
-    metric_breakdown: Dict[str, float]  # correctness, explanation, rigor/justification
-    total_submissions: int
-    submissions: List[Dict[str, Any]] # Raw submissions for drill-down views
+                fetch(API_BASE_URL + '/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        problem_id: currentProblemId,
+                        student_code: studentCode,
+                        exact_answer: exactAnswer,
+                        explanation: explanationWork
+                    })
 
-def load_json(file_path: str, default: Any) -> Any:
-    if not os.path.exists(file_path):
-        return default
-    try:
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except:
-        return default
+                })
+                .then(res => res.json())
+                .then(data => {
+                    const score = Number(data.correctness_score ?? 0);
+                    const gotItRight = score >= 7;
+                    const shouldComplete = gotItRight || nextAttemptCount >= 2;
+                    const alreadyCompleted = completedProblemIds.includes(currentProblemId);
 
-def save_json(file_path: str, data: Any) -> None:
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=2)
+                    setIsRetryPhase(false);
+                    setLoading(true);
+                    setFeedback(data);
 
-if not os.path.exists(PROBLEMS_FILE):
-    sample_problems = [
-        {"id": "prob1", "title": "Prime Time", "concept": "Number Theory", "question": "How many positive integers less than 100 have exactly three positive divisors?", "official_answer": "4", "rubric": "Squares of primes. Primes <10: 2,3,5,7 => 4,9,25,49. Ans: 4.", "image_url": ""},
-        {"id": "prob2", "title": "Arranging Letters", "concept": "Combinatorics", "question": "In how many ways can the letters of the word 'MATH' be arranged if the vowels must be together?", "official_answer": "24", "rubric": "There is only 1 vowel ('A'). It is always together with itself.", "image_url": ""}
-    ]
-    save_json(PROBLEMS_FILE, sample_problems)
+                    setStreak(Number(data.streak ?? 0));
+                    setSubmissionAttempts(prev => ({ ...prev, [currentQuestionIndex]: nextAttemptCount }));
+                    setSessionStats(prev => ({
+                        totalAttempted: prev.totalAttempted + 1,
+                        totalCorrect: prev.totalCorrect + (gotItRight ? 1 : 0)
+                    }));
+                    setLoading(false);
 
-if not os.path.exists(STUDENTS_FILE):
-    save_json(STUDENTS_FILE, list(ACCESS_CODES.keys()))
+                    if (shouldComplete) {
+                        setCompletedProblemIds(prev => prev.includes(currentProblemId) ? prev : [...prev, currentProblemId]);
+                    }
+                    setIsRetryPhase(!gotItRight && nextAttemptCount === 1);
 
-if not os.path.exists(HISTORY_FILE):
-    save_json(HISTORY_FILE, [])
+                    if (gotItRight && !alreadyCompleted) {
+                        setCorrectProblemCount(prev => prev + 1);
+                    }
+                })
+                .catch(() => {
+                    setError('Submission failed.');
+                    setLoading(false);
+                });
+            };
 
-@app.get("/", response_class=HTMLResponse)
-def read_root():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    frontend_path = os.path.join(current_dir, "math.html")
-    if os.path.exists(frontend_path):
-        with open(frontend_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return f"<h1>Backend Running</h1>"
+            const loadNextProblem = () => {
+                setError('');
+                setFeedback(null);
+                setTextWork('');
+                setShowComposer(true);
+                setLoading(false);
 
-@app.post("/api/login", response_model=LoginResponse)
-def login(request: LoginRequest):
-    student_code = request.student_code.lower().strip()
-    if student_code in ACCESS_CODES:
-        return LoginResponse(success=True, message="Login successful", role=ACCESS_CODES[student_code])
-    return LoginResponse(success=False, message="Invalid access code")
+                fetchProblems().then((data) => {
+                    if (!Array.isArray(data) || data.length === 0) {
+                        setCurrentQuestionIndex(0);
+                        return;
+                    }
 
-@app.get("/api/problems", response_model=List[Problem])
-def get_problems():
-    return load_json(PROBLEMS_FILE, [])
+                    setCurrentQuestionIndex((prev) => {
+                        const nextIndex = prev + 1;
+                        if (nextIndex >= data.length) {
+                            return data.length;
+                        }
+                        return nextIndex;
+                    });
+                });
+            };
 
-@app.post("/api/problems", response_model=Problem)
-def add_problem(problem: ProblemCreate):
-    problems = load_json(PROBLEMS_FILE, [])
-    for p in problems:
-        if p["id"] == problem.id:
-            raise HTTPException(status_code=400, detail="Problem ID already exists")
-    new_problem = {
-        "id": problem.id, "title": problem.title, "concept": problem.concept,
-        "question": problem.question, "official_answer": "", 
-        "rubric": problem.reference_solution, "image_url": problem.image_url
-    }
-    problems.append(new_problem)
-    save_json(PROBLEMS_FILE, problems)
-    return new_problem
+            const loadPreviousProblem = () => {
+                setError('');
+                setFeedback(null);
+                setTextWork('');
+                setShowComposer(true);
+                setLoading(false);
 
-# NEW ENDPOINT: Delete a problem
-@app.delete("/api/problems/{problem_id}")
-def delete_problem(problem_id: str):
-    problems = load_json(PROBLEMS_FILE, [])
-    updated_problems = [p for p in problems if p["id"] != problem_id]
-    
-    if len(problems) == len(updated_problems):
-        raise HTTPException(status_code=404, detail="Problem not found")
-        
-    save_json(PROBLEMS_FILE, updated_problems)
-    return {"success": True, "message": f"Problem {problem_id} deleted successfully."}
+                setCurrentQuestionIndex((prev) => {
+                    if (prev <= 0) return 0;
+                    if (prev >= problems.length) return problems.length - 1;
+                    return prev - 1;
+                });
+            };
 
-@app.post("/api/submit", response_model=SubmitResponse)
-async def submit_solution(request: SubmitRequest):
-    # Load problem details for context
-    problems = load_json(PROBLEMS_FILE, [])
-    problem = next((p for p in problems if p["id"] == request.problem_id), None)
-    question = problem.get("question", "") if problem else ""
-    rubric = problem.get("rubric", "") if problem else ""
-    # If rubric empty, fallback to official_answer
-    if not rubric and problem:
-        rubric = problem.get("official_answer", "")
+            const loadDashboard = () => {
+                fetch(API_BASE_URL + '/api/student/' + studentCode + '/performance')
+                    .then(res => res.json())
+                    .then(data => {
+                        setPerformance(data);
+                        setView('dashboard');
+                    });
+            };
 
-    # Default fallback response
-    fallback = {
-        "correctness_score": 0.0,
-        "explanation_score": 0.0,
-        "rigor_score": 0.0,
-        "justification": "API error: unable to evaluate submission.",
-        "tutor_hint": "Please try again later."
-    }
+            const loadOperatorPanel = () => {
+                fetch(API_BASE_URL + '/api/operator/students')
+                    .then(res => res.json())
+                    .then(data => {
+                        setStudentOverview(data);
+                        setView('operator_panel');
+                    })
+                    .catch(() => setError('Failed to load telemetry dashboard.'));
+            };
 
-    try:
-        # Get Hugging Face API token from environment, with hardcoded fallback
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "hf_fallback_token_for_demo"
-        # Create Hugging Face Async Inference client
-        client = AsyncInferenceClient(
-            api_key="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"
-        )
+            const loadStudentAudit = (studentId) => {
+                fetch(`${API_BASE_URL}/api/admin/submissions/${studentId}`)
+                    .then(res => res.json())
+                    .then(data => setStudentAudit(Array.isArray(data) ? data : []))
+                    .catch(() => setStudentAudit([]));
+            };
 
-        # Model to use - can be configured via environment variable, default to math-optimized model
-        hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
+            const handleDeleteProblem = (id) => {
+                if (!confirm(`Are you sure you want to delete problem "${id}"? This is irreversible.`)) return;
+                
+                fetch(`${API_BASE_URL}/api/problems/${id}`, { method: 'DELETE' })
+                .then(res => res.json())
+                .then(() => {
+                    fetchProblems();
+                    loadOperatorPanel();
+                })
+                .catch(() => setError('Failed to delete problem.'));
+            };
 
-        # System prompt instructing to output JSON in a markdown code block
-        system_prompt_json = (
-            "You are a strict math competition judge. Given a student's solution text, the problem statement, "
-            "and the reference solution/rubric, score the student's work on three criteria: correctness, explanation, "
-            "and rigor/justification, each on a scale from 0 to 10. Provide a justification for the scores, pointing out "
-            "any missing steps, errors, or missing explanations. Also provide a tutor hint that gives a conceptual hint "
-            "without revealing the direct answer. Return ONLY a JSON object wrapped in a markdown code block like:\n"
-            "```json\n{\n  \"correctness_score\": 0.0,\n  \"explanation_score\": 0.0,\n  \"rigor_score\": 0.0,\n  \"justification\": \"string explaining the deductions or points earned\",\n  \"tutor_hint\": \"string providing a conceptual hint without revealing the direct answer\"\n}\n```\n"
-        )
+            const handleAddProblemSubmit = (e) => {
+                    fetchProblems(); // reload problem lists
+                    loadOperatorPanel(); // reload raw submissions calculation matrix
+                })
+                .catch(() => setError('Failed to delete problem.'));
+            };
 
-        # System and user prompts for chat completion
-        system_prompt = system_prompt_json
-        user_content = f"""Problem Statement:
-{question}
+            const handleAddProblemSubmit = (e) => {
+                e.preventDefault();
+                setLoading(true);
+                fetch(API_BASE_URL + '/api/problems', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(addProblemForm)
+                })
+                .then(res => res.json())
+                .then(() => {
+                    setAddProblemSuccess('Problem added!');
+                    setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' });
+                    setLoading(false);
+                    fetchProblems();
+                })
+                .catch(() => {
+                    setError('Failed to add problem.');
+                    setLoading(false);
+                });
+            };
 
-Reference Solution / Rubric:
-{rubric}
+            const startEditingProblem = (problem) => {
+                setEditingProblemId(problem.id);
+                setEditProblemForm({
+                    title: problem.title || '',
+                    concept: problem.concept || '',
+                    question: problem.question || '',
+                    rubric: problem.rubric || '',
+                    lesson_link: problem.lesson_link || '',
+                    url: problem.url || ''
+                });
+            };
 
-Student's Final Answer: {request.exact_answer}
-Student's Explanation: {request.explanation}"""
+            const handleUpdateProblem = (e, problemId) => {
+                e.preventDefault();
+                setLoading(true);
+                fetch(`${API_BASE_URL}/api/problems/${problemId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(editProblemForm)
+                })
+                .then(res => res.json())
+                .then(() => {
+                    setEditingProblemId(null);
+                    setLoading(false);
+                    fetchProblems();
+                    loadOperatorPanel();
+                })
+                .catch(() => {
+                    setError('Failed to update problem.');
+                    setLoading(false);
+                });
+            };
 
-        # Generate text using the chat completion API asynchronously
-        # Parameters for deterministic output similar to temperature=0
-        chat_completion = await client.chat.completions.create(
-            model=hf_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            max_tokens=512,
-            temperature=0.0,
-        )
-        generated_text = chat_completion.choices[0].message.content
-        print(f"RAW MODEL OUTPUT: {generated_text}")
+            // ---- ANALYTICS ENGINES FOR ZOOM SCOPES ----
+            const computeGlobalMetrics = () => {
+                let totalSub = 0, cSum = 0, eSum = 0, jSum = 0;
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        totalSub++;
+                        cSum += sub.correctness_score;
+                        eSum += sub.explanation_score;
+                        jSum += sub.rigor_score;
+                    });
+                });
+                if (totalSub === 0) return { combined: 0, c: 0, e: 0, j: 0 };
+                return {
+                    combined: (((cSum + eSum + jSum) / 3) / totalSub).toFixed(1),
+                    c: (cSum / totalSub).toFixed(1),
+                    e: (eSum / totalSub).toFixed(1),
+                    j: (jSum / totalSub).toFixed(1)
+                };
+            };
 
-        # Find the absolute first '{' and absolute last '}' to strip all conversational text
-        start_idx = generated_text.find("{")
-        end_idx = generated_text.rfind("}")
+            const computeConceptMetrics = () => {
+                const map = {};
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        const prob = problems.find(p => p.id === sub.problem_id);
+                        const concept = prob ? prob.concept : "General Operations";
+                        if (!map[concept]) map[concept] = { total: 0, score: 0 };
+                        map[concept].total++;
+                        map[concept].score += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                    });
+                });
+                return Object.entries(map).map(([k, v]) => ({ name: k, avg: (v.score / v.total).toFixed(1) }));
+            };
 
-        if start_idx != -1 and end_idx != -1:
-            result_text = generated_text[start_idx:end_idx + 1]
-        else:
-            result_text = generated_text
+            const computeQuestionMetrics = () => {
+                return problems.map(p => {
+                    let total = 0, sum = 0;
+                    studentOverview.forEach(s => {
+                        s.submissions.forEach(sub => {
+                            if (sub.problem_id === p.id) {
+                                total++;
+                                sum += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                            }
+                        });
+                    });
+                    return { ...p, totalSubmissions: total, avgScore: total > 0 ? (sum / total).toFixed(1) : "N/A" };
+                });
+            };
 
-        # Parse JSON
-        import json as pyjson
-        parsed = pyjson.loads(result_text)
-        # Ensure all required keys present and are correct types
-        correctness = float(parsed.get("correctness_score", 0.0))
-        explanation = float(parsed.get("explanation_score", 0.0))
-        rigor = float(parsed.get("rigor_score", 0.0))
-        justification = str(parsed.get("justification", ""))
-        tutor_hint = str(parsed.get("tutor_hint", ""))
-        # Clamp scores to 0-10
-        correctness = max(0.0, min(10.0, correctness))
-        explanation = max(0.0, min(10.0, explanation))
-        rigor = max(0.0, min(10.0, rigor))
-        feedback = {
-            "correctness_score": correctness,
-            "explanation_score": explanation,
-            "rigor_score": rigor,
-            "justification": justification,
-            "tutor_hint": tutor_hint
+            const computeStudentAverage = (student) => {
+                if (!student.submissions || student.submissions.length === 0) {
+                    return '0.0';
+                }
+                const total = student.submissions.reduce((sum, sub) => {
+                    return sum + ((sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3);
+                }, 0);
+                return (total / student.submissions.length).toFixed(1);
+            };
+
+            const globalData = computeGlobalMetrics();
+            const currentProblem = problems[currentQuestionIndex] || null;
+            const completedCount = completedProblemIds.filter(id => problems.some(problem => problem.id === id)).length;
+            const remainingQuestions = problems.length > 0 ? Math.max(problems.length - completedCount, 0) : 0;
+            const isCourseComplete = problems.length > 0 && completedCount >= problems.length;
+            const deckFinished = problems.length > 0 && currentQuestionIndex >= problems.length;
+            const incompleteIndices = problems.length > 0 ? problems.map((problem, index) => completedProblemIds.includes(problem.id) ? null : index).filter(index => index !== null) : [];
+            const currentAttemptCount = submissionAttempts[currentQuestionIndex] || 0;
+            const showFullFeedback = Boolean(feedback) && (Number(feedback.correctness_score ?? 0) >= 7 || currentAttemptCount >= 2);
+            const accuracyRate = problems.length > 0 ? ((correctProblemCount / problems.length) * 100).toFixed(1) : '0.0';
+
+            return (
+                <div className="min-h-screen bg-zinc-950 text-zinc-100">
+                    <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 lg:p-6">
+                        <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-3">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-600/20 text-lg">∑</div>
+                                <div>
+                                    <div className="text-sm font-semibold text-zinc-100">MathClub Tracker</div>
+                                    <div className="text-xs text-zinc-400">{role === 'operator' ? 'Operator View' : 'Student Workspace'}</div>
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                {view !== 'login' && (
+                                    <>
+                                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-300">
+                                            🔥 Streak: {streak}
+                                        </span>
+                                        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-300">
+                                            {studentCode || 'Guest'}
+                                        </span>
+                                    </>
+                                )}
+                            </div>
+                        </header>
+
+                        {view !== 'login' && (
+                            <div className="flex flex-wrap gap-2">
+                                <button onClick={() => setView('workspace')} className={`rounded-full px-3 py-1.5 text-sm ${view === 'workspace' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>
+                                    Workspace
+                                </button>
+                                {role === 'student' && (
+                                    <button onClick={loadDashboard} className={`rounded-full px-3 py-1.5 text-sm ${view === 'dashboard' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>
+                                        Dashboard
+                                    </button>
+                                )}
+                                {role === 'operator' && (
+                                    <button onClick={loadOperatorPanel} className={`rounded-full px-3 py-1.5 text-sm ${view === 'operator_panel' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>
+                                        Control Room
+                                    </button>
+                                )}
+                                <button onClick={() => { setView('login'); setStudentCode(''); setRole(''); }} className="rounded-full bg-zinc-800 px-3 py-1.5 text-sm text-red-400 hover:text-red-300">
+                                    Logout
+                                </button>
+                            </div>
+                        )}
+
+                        {error && <div className="rounded-xl border border-red-500/40 bg-red-900/40 p-3 text-sm text-red-200">{error}</div>}
+
+                        {view === 'login' && (
+                            <div className="mx-auto mt-10 w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
+                                <h2 className="mb-2 text-lg font-semibold">Enter Access Code</h2>
+                                <form onSubmit={handleLogin} className="space-y-4">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., lukep"
+                                        value={studentCode}
+                                        onChange={(e) => setStudentCode(e.target.value.toLowerCase().trim())}
+                                        className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-white focus:outline-none focus:border-indigo-500"
+                                    />
+                                    <button className="w-full rounded-lg bg-indigo-600 p-3 font-medium transition hover:bg-indigo-700">Enter Suite</button>
+                                </form>
+                            </div>
+                        )}
+
+                        {view === 'workspace' && problems.length > 0 && isCourseComplete && (
+                            <div className="rounded-2xl border border-emerald-700/40 bg-zinc-900 p-6 text-center">
+                                <h2 className="mb-3 text-2xl font-semibold text-emerald-300">Congratulations! You have finished all of the course material that we have for you!</h2>
+                                <p className="mb-4 text-sm text-zinc-400">You have completed every question in the deck.</p>
+                                <div className="mx-auto flex max-w-sm items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm">
+                                    <div>
+                                        <div className="text-xs uppercase tracking-wide text-zinc-500">Accuracy</div>
+                                        <div className="text-lg font-semibold text-emerald-300">{accuracyRate}%</div>
+                                    </div>
+                                    <div className="h-8 w-px bg-zinc-800" />
+                                    <div>
+                                        <div className="text-xs uppercase tracking-wide text-zinc-500">Completed</div>
+                                        <div className="text-lg font-semibold text-zinc-100">{completedCount}/{problems.length}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'workspace' && problems.length > 0 && deckFinished && !isCourseComplete && (
+                            <div className="rounded-2xl border border-amber-700/40 bg-zinc-900 p-6 text-center">
+                                <h2 className="mb-3 text-2xl font-semibold text-amber-300">Great job on {completedCount} questions you did, there are still {incompleteIndices.length} left for you to complete. Go back and try those.</h2>
+                                <div className="mx-auto mt-4 flex flex-col gap-2 text-left">
+                                    {incompleteIndices.map(index => (
+                                        <button key={index} onClick={() => { setCurrentQuestionIndex(index); setFeedback(null); setTextWork(''); setShowComposer(true); }} className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 hover:border-indigo-500 hover:text-white">
+                                            Go to Question {index + 1}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'workspace' && problems.length > 0 && !deckFinished && !isCourseComplete && (
+                            <div className="space-y-4">
+                                <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                        <span className="rounded-full border border-indigo-700 bg-indigo-900/60 px-3 py-1 text-xs font-medium text-indigo-300">
+                                            {currentProblem?.concept}
+                                        </span>
+                                        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-400">
+                                            {Math.min(currentQuestionIndex + 1, problems.length)} / {problems.length} · {remainingQuestions} remaining
+                                        </span>
+                                    </div>
+                                    <h2 className="mb-3 text-xl font-semibold">{currentProblem?.title}</h2>
+                                    <p className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-4 text-sm leading-relaxed text-zinc-300">
+                                        {currentProblem?.question}
+                                    </p>
+                                    {Boolean(feedback) && (currentProblem?.lesson_link || currentProblem?.url) && (
+                                        <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Study Resources</div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {currentProblem?.lesson_link && (
+                                                    <a href={currentProblem.lesson_link} target="_blank" rel="noreferrer" className="rounded-full border border-indigo-700/40 bg-indigo-900/40 px-3 py-1 text-sm text-indigo-300 hover:bg-indigo-900/60">
+                                                        Lesson Link ↗
+                                                    </a>
+                                                )}
+                                                {currentProblem?.url && (
+                                                    <a href={currentProblem.url} target="_blank" rel="noreferrer" className="rounded-full border border-amber-600/30 bg-amber-500/10 px-3 py-1 text-sm text-amber-300 hover:bg-amber-500/20">
+                                                        Practice URL ↗
+                                                    </a>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                                    {showComposer ? (
+                                        isRetryPhase ? (
+                                            <div className="space-y-3">
+
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <label className="mb-1 block text-xs font-semibold text-zinc-400" htmlFor="exact-answer">Final / Exact Answer</label>
+                                                        <input
+                                                            id="exact-answer"
+                                                            type="text"
+                                                            placeholder="Enter the final answer (e.g., 24)"
+                                                            value={exactAnswer}
+                                                            onChange={(e) => setExactAnswer(e.target.value)}
+                                                            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="mb-1 block text-xs font-semibold text-zinc-400" htmlFor="explanation-work">Your Explanation / Step-by-Step Logic</label>
+                                                        <textarea
+                                                            id="explanation-work"
+                                                            rows="6"
+                                                            placeholder="Write your step-by-step reasoning here..."
+                                                            value={explanationWork}
+                                                            onChange={(e) => setExplanationWork(e.target.value)}
+                                                            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 font-mono text-sm text-white focus:outline-none"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                                                    <button onClick={loadNextProblem} className="rounded-full border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-200 transition hover:border-indigo-500 hover:text-white">
+                                                        Next Problem
+                                                    </button>
+                                                    <button onClick={handleSubmitSolution} disabled={loading} className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium transition hover:bg-indigo-700 disabled:opacity-50">
+                                                        {loading ? 'Submitting...' : 'Submit Solution'}
+                                                    </button>
+                                                </div>
+                                            </>
+                                        )
+                                    ) : (
+                                        <div className="flex justify-center">
+
+                                        </div>
+                                    )}
+                                </div>
+
+                                {feedback && !showFullFeedback && (
+                                    <div className="rounded-2xl border border-amber-700/40 bg-amber-950/20 p-4">
+
+                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-sm text-zinc-300">
+                                            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Tutor Hint</div>
+                                            <p>{feedback.tutor_hint}</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {feedback && (
+                                    (() => {
+                                        const isCorrect = Number(feedback.correctness_score ?? 0) >= 7;
+                                        if (!isCorrect) {
+                                            return (
+                                                <div className="rounded-2xl border border-red-700/40 bg-red-950/30 p-4">
+                                                    <div className="mb-2 text-sm font-semibold text-red-200">Incorrect</div>
+                                                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-sm text-zinc-300">
+                                                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Tutor Hint</div>
+                                                        <p>{feedback.tutor_hint}</p>
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+
+                                        return (
+                                            <div className="rounded-2xl border border-emerald-700/40 bg-emerald-950/30 p-4">
+                                                <div className="mb-2 text-sm font-semibold text-emerald-200">Correct</div>
+                                                <div className="flex flex-wrap items-center gap-3 text-sm">
+                                                    <span className="rounded-full bg-zinc-800 px-2.5 py-1">Correctness <strong>{feedback.correctness_score}/10</strong></span>
+                                                    <span className="rounded-full bg-zinc-800 px-2.5 py-1">Explanation <strong>{feedback.explanation_score}/10</strong></span>
+                                                    <span className="rounded-full bg-zinc-800 px-2.5 py-1">Rigor <strong>{feedback.rigor_score}/10</strong></span>
+                                                </div>
+                                                <div className="mt-4 space-y-3 text-sm text-zinc-300">
+                                                    <div>
+                                                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Teacher Justification</div>
+                                                        <p>{feedback.justification}</p>
+                                                    </div>
+                                                    <div>
+                                                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Step-by-Step Solution</div>
+                                                        <p>{feedback.teacher_solution || feedback.explanation}</p>
+                                                    </div>
+                                                    <div>
+                                                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Tutor Hint</div>
+                                                        <p>{feedback.tutor_hint}</p>
+                                                    </div>
+                                                    {(feedback.resources_used || feedback.url) && (
+                                                        <div className="pt-2">
+                                                            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Study Resources</div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {feedback.resources_used && <span className="rounded-full border border-indigo-700/40 bg-indigo-900/40 px-3 py-1 text-sm text-indigo-300">{feedback.resources_used}</span>}
+                                                                {feedback.url && <a href={feedback.url} target="_blank" rel="noreferrer" className="rounded-full border border-amber-600/30 bg-amber-500/10 px-3 py-1 text-sm text-amber-300 hover:bg-amber-500/20">Practice URL ↗</a>}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()
+                                )}
+                            </div>
+                        )}
+
+                        {view === 'operator_panel' && (
+                            <div className="space-y-4">
+                                <div className="flex flex-wrap gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 p-2">
+                                    <button onClick={() => setOperatorScope('global')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'global' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Overview</button>
+                                    <button onClick={() => setOperatorScope('questions')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'questions' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Questions</button>
+                                    <button onClick={() => setOperatorScope('students')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'students' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Students</button>
+                                    <button onClick={() => setOperatorScope('add_problems')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'add_problems' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Add</button>
+                                </div>
+
+                                {operatorScope === 'global' && (
+                                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+                                        <h2 className="mb-2 text-xl font-semibold">Global Performance</h2>
+                                        <p className="mb-4 text-sm text-zinc-400">A compact view of aggregate scoring across all submissions.</p>
+                                        <div className="grid gap-3 sm:grid-cols-4">
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-center">
+                                                <div className="text-2xl font-black text-indigo-400">{globalData.combined}/10</div>
+                                                <div className="mt-1 text-xs uppercase text-zinc-500">Combined</div>
+                                            </div>
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-center">
+                                                <div className="text-2xl font-black text-emerald-400">{globalData.c}/10</div>
+                                                <div className="mt-1 text-xs uppercase text-zinc-500">Correctness</div>
+                                            </div>
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-center">
+                                                <div className="text-2xl font-black text-amber-400">{globalData.e}/10</div>
+                                                <div className="mt-1 text-xs uppercase text-zinc-500">Explanation</div>
+                                            </div>
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-center">
+                                                <div className="text-2xl font-black text-cyan-400">{globalData.j}/10</div>
+                                                <div className="mt-1 text-xs uppercase text-zinc-500">Justification</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'questions' && (
+                                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                                        <div className="space-y-3">
+                                            {problems.map(problem => (
+                                                <div key={problem.id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                                                    {editingProblemId === problem.id ? (
+                                                        <form onSubmit={(e) => handleUpdateProblem(e, problem.id)} className="space-y-3">
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Title</label>
+                                                                <input value={editProblemForm.title} onChange={(e) => setEditProblemForm({...editProblemForm, title: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Concept</label>
+                                                                <input value={editProblemForm.concept} onChange={(e) => setEditProblemForm({...editProblemForm, concept: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Question</label>
+                                                                <textarea value={editProblemForm.question} onChange={(e) => setEditProblemForm({...editProblemForm, question: e.target.value})} rows="3" className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Rubric</label>
+                                                                <textarea value={editProblemForm.rubric} onChange={(e) => setEditProblemForm({...editProblemForm, rubric: e.target.value})} rows="3" className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Lesson Link</label>
+                                                                <input value={editProblemForm.lesson_link} onChange={(e) => setEditProblemForm({...editProblemForm, lesson_link: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Practice URL</label>
+                                                                <input value={editProblemForm.url} onChange={(e) => setEditProblemForm({...editProblemForm, url: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div className="flex justify-end gap-2">
+                                                                <button type="button" onClick={() => setEditingProblemId(null)} className="text-sm text-zinc-400 hover:text-white">Cancel</button>
+                                                                <button type="submit" disabled={loading} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium transition hover:bg-indigo-700 disabled:opacity-50">
+                                                                    {loading ? 'Saving...' : 'Save'}
+                                                                </button>
+                                                            </div>
+                                                        </form>
+                                                    ) : (
+                                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                                            <div>
+                                                                <h3 className="font-semibold text-zinc-200">{problem.title}</h3>
+                                                                <p className="mt-1 text-sm text-zinc-400">{problem.question}</p>
+                                                                <p className="mt-2 text-xs text-indigo-400">{problem.concept}</p>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                <button onClick={() => startEditingProblem(problem)} className="text-sm text-indigo-400 hover:text-indigo-200">Edit</button>
+                                                                <button onClick={() => handleDeleteProblem(problem.id)} className="text-sm text-red-400 hover:text-red-200">Delete</button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'students' && (
+                                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                                        <div className="space-y-3">
+                                            {studentOverview.map(student => (
+                                                <div key={student.student_code} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                                                    <div>
+                                                        <h3 className="font-semibold capitalize text-zinc-200">{student.student_code}</h3>
+                                                        <p className="text-sm text-zinc-400">{student.total_submissions} submissions logged</p>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="rounded-lg bg-zinc-800 px-3 py-1 text-sm text-indigo-400">Avg {computeStudentAverage(student)}/10</span>
+                                                        <button onClick={() => { setSelectedStudent(student); setOperatorScope('student_detail'); }} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium transition hover:bg-indigo-700">
+                                                            View
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'add_problems' && (
+                                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+                                        <h2 className="mb-2 text-xl font-semibold">Add New Problem</h2>
+                                        <p className="mb-4 text-sm text-zinc-400">Create a new competition problem with all required fields.</p>
+                                        <form onSubmit={handleAddProblemSubmit} className="space-y-4">
+                                            <input type="text" placeholder="Problem ID" value={addProblemForm.id} onChange={(e) => setAddProblemForm({...addProblemForm, id: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Title" value={addProblemForm.title} onChange={(e) => setAddProblemForm({...addProblemForm, title: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Concept" value={addProblemForm.concept} onChange={(e) => setAddProblemForm({...addProblemForm, concept: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <textarea placeholder="Question" value={addProblemForm.question} onChange={(e) => setAddProblemForm({...addProblemForm, question: e.target.value})} rows="4" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Official Answer" value={addProblemForm.official_answer} onChange={(e) => setAddProblemForm({...addProblemForm, official_answer: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Image URL (optional)" value={addProblemForm.image_url} onChange={(e) => setAddProblemForm({...addProblemForm, image_url: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Lesson Link (optional)" value={addProblemForm.lesson_link} onChange={(e) => setAddProblemForm({...addProblemForm, lesson_link: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <input type="text" placeholder="Practice URL (optional)" value={addProblemForm.url} onChange={(e) => setAddProblemForm({...addProblemForm, url: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <textarea placeholder="Reference solution / rubric" value={addProblemForm.reference_solution} onChange={(e) => setAddProblemForm({...addProblemForm, reference_solution: e.target.value})} rows="6" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <div className="flex justify-between gap-2">
+                                                <button type="button" onClick={() => setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' })} className="text-sm text-zinc-400 hover:text-white">Clear</button>
+                                                <button type="submit" disabled={loading} className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium transition hover:bg-indigo-700 disabled:opacity-50">
+                                                    {loading ? 'Adding...' : 'Add Problem'}
+                                                </button>
+                                            </div>
+                                            {addProblemSuccess && <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/40 p-3 text-sm text-emerald-300">{addProblemSuccess}</div>}
+                                        </form>
+                                    </div>
+                                )}
+
+                                {operatorScope === 'student_detail' && selectedStudent && (
+                                    <div className="space-y-4">
+                                        <button onClick={() => setOperatorScope('students')} className="text-sm text-indigo-400 hover:text-indigo-200">← Back to students</button>
+                                        <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+                                            <h2 className="mb-4 text-xl font-semibold capitalize">{selectedStudent.student_code}'s Performance</h2>
+                                            <button onClick={() => loadStudentAudit(selectedStudent.student_code)} className="mb-4 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 hover:border-indigo-500 hover:text-white">
+                                                View Raw Submissions
+                                            </button>
+                                            {studentAudit.length > 0 && (
+                                                <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-sm text-zinc-300">
+                                                    {studentAudit.map((entry, index) => (
+                                                        <div key={index} className="mb-2 border-b border-zinc-800 pb-2 last:border-b-0">
+                                                            <div className="font-medium text-zinc-100">[{entry.problem_id}] - "{entry.text_work}" - ({entry.correctness_score}/10, {entry.explanation_score}/10, {entry.rigor_score}/10)</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            <div className="grid gap-4 md:grid-cols-2">
+                                                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                                                    <h4 className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Conceptual Competencies</h4>
+                                                    {Object.entries(selectedStudent.performance_metrics).map(([k, v]) => (
+                                                        <div key={k} className="flex justify-between py-1 text-sm">
+                                                            <span>{k}</span><span className="font-bold text-indigo-400">{v}/10</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                                                    <h4 className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Rubric Breakdown</h4>
+                                                    <div className="flex justify-between py-1 text-sm"><span>Correctness</span><span className="font-bold text-emerald-400">{selectedStudent.metric_breakdown.correctness}/10</span></div>
+                                                    <div className="flex justify-between py-1 text-sm"><span>Explanation</span><span className="font-bold text-amber-400">{selectedStudent.metric_breakdown.explanation}/10</span></div>
+                                                    <div className="flex justify-between py-1 text-sm"><span>Justification</span><span className="font-bold text-cyan-400">{selectedStudent.metric_breakdown.justification}/10</span></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="flex justify-end pt-2">
+                                    <button
+                                        onClick={() => {
+                                            fetch(`${API_BASE_URL}/api/admin/reset`, { method: 'POST' })
+                                                .then(() => window.location.reload());
+                                        }}
+                                        className="rounded-full border border-red-700/40 bg-red-950/40 px-3 py-1.5 text-sm text-red-300 transition hover:bg-red-900/60"
+                                    >
+                                        Reset Testing Profile
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
         }
-    except Exception as e:
-        # Log error if desired (print for simplicity)
-        print(f"Hugging Face API error: {e}")
-        feedback = fallback
 
-    # Save submission to history
-    history = load_json(HISTORY_FILE, [])
-    submission_entry = {
-        "student_code": request.student_code.lower().strip(),
-        "problem_id": request.problem_id,
-        "exact_answer": request.exact_answer,
-        "explanation": request.explanation,
-        "timestamp": time.time(),
-        **feedback
-    }
-    history.append(submission_entry)
-    save_json(HISTORY_FILE, history)
-    return feedback
-
-@app.get("/api/student/{student_code}/performance", response_model=PerformanceResponse)
-def get_performance(student_code: str):
-    history = load_json(HISTORY_FILE, [])
-    student_history = [e for e in history if e.get("student_code") == student_code]
-    if not student_history:
-        return PerformanceResponse(averages={}, total_submissions=0)
-
-    problems = load_json(PROBLEMS_FILE, [])
-    problem_concept = {p["id"]: p["concept"] for p in problems}
-
-    concept_scores = {}
-    for entry in student_history:
-        pid = entry.get("problem_id")
-        concept = problem_concept.get(pid)
-        if not concept: continue
-        avg_score = (entry.get("correctness_score", 0) + entry.get("explanation_score", 0) + entry.get("rigor_score", 0)) / 3.0
-        concept_scores.setdefault(concept, []).append(avg_score)
-
-    averages = {c: round(sum(s)/len(s), 2) for c, s in concept_scores.items()}
-    return PerformanceResponse(averages=averages, total_submissions=len(student_history))
-
-@app.get("/api/admin/submissions/{student_id}", response_model=List[Dict[str, Any]])
-def get_admin_submissions(student_id: str):
-    history = load_json(HISTORY_FILE, [])
-    student_code = student_id.lower().strip()
-    return [e for e in history if e.get("student_code") == student_code]
-
-@app.get("/api/operator/students", response_model=List[StudentOverview])
-def get_operator_student_overview():
-    students = load_json(STUDENTS_FILE, [])
-    history = load_json(HISTORY_FILE, [])
-    problems = load_json(PROBLEMS_FILE, [])
-    problem_concept = {p["id"]: p["concept"] for p in problems}
-
-    overview_list = []
-    for student_code in students:
-        student_history = [e for e in history if e.get("student_code") == student_code]
-        
-        if not student_history:
-            overview_list.append(StudentOverview(
-                student_code=student_code, performance_metrics={},
-                metric_breakdown={"correctness": 0, "explanation": 0, "justification": 0},
-                total_submissions=0, submissions=[]
-            ))
-            continue
-
-        concept_scores = {}
-        c_tot, e_tot, j_tot = 0.0, 0.0, 0.0
-        
-        for entry in student_history:
-            pid = entry.get("problem_id")
-            concept = problem_concept.get(pid, "Unknown")
-            
-            c = entry.get("correctness_score", 0)
-            e = entry.get("explanation_score", 0)
-            j = entry.get("rigor_score", 0)
-            
-            c_tot += c
-            e_tot += e
-            j_tot += j
-            
-            avg_score = (c + e + j) / 3.0
-            concept_scores.setdefault(concept, []).append(avg_score)
-
-        n = len(student_history)
-        averages = {c: round(sum(s)/len(s), 2) for c, s in concept_scores.items()}
-        breakdown = {
-            "correctness": round(c_tot / n, 2),
-            "explanation": round(e_tot / n, 2),
-            "justification": round(j_tot / n, 2)
-        }
-
-        overview_list.append(StudentOverview(
-            student_code=student_code,
-            performance_metrics=averages,
-            metric_breakdown=breakdown,
-            total_submissions=n,
-            submissions=student_history
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
         ))
 
     return overview_list
