@@ -211,7 +211,7 @@ all_club_submissions = list(load_json(HISTORY_FILE, []))
 def read_root():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     possible_paths = [
-        os.path.join(current_dir, "math.html"),
+        os.path.join(current_dir, "index.html"),
         os.path.join(current_dir, "frontend", "math.html"),
     ]
     for path in possible_paths:
