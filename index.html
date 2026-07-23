@@ -11,11 +11,29 @@
 </head>
 <body class="bg-zinc-900 text-zinc-100 min-h-screen">
     <div id="root"></div>
- 
+
     <script type="text/babel" data-presets="react">
-        const API_BASE_URL = window.location.origin;
+        // IMPORTANT: GitHub Pages only serves this static file — it cannot run the
+        // Python backend. The backend runs separately (see DEPLOY.md), so this must
+        // point at that backend's URL, not window.location.origin.
+        //
+        // 1. Deploy main.py to Render (see DEPLOY.md) to get a URL like:
+        //      https://mathclub-tracker.onrender.com
+        // 2. Paste that URL below, replacing the placeholder.
+        const API_BASE_URL = "https://YOUR-RENDER-APP-NAME.onrender.com";
         const MAX_ATTEMPTS = 2;
- 
+        const DIFFICULTY_STYLES = {
+            Easy: "border-emerald-600/40 bg-emerald-500/10 text-emerald-300",
+            Medium: "border-amber-600/40 bg-amber-500/10 text-amber-300",
+            Hard: "border-red-600/40 bg-red-500/10 text-red-300"
+        };
+
+        function DifficultyBadge({ difficulty }) {
+            if (!difficulty) return null;
+            const cls = DIFFICULTY_STYLES[difficulty] || "border-zinc-600/40 bg-zinc-500/10 text-zinc-300";
+            return <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{difficulty}</span>;
+        }
+
         function App() {
             const [view, setView] = React.useState('login');
             const [studentCode, setStudentCode] = React.useState('');
@@ -24,33 +42,35 @@
             const [currentQuestionIndex, setCurrentQuestionIndex] = React.useState(0);
             const [exactAnswer, setExactAnswer] = React.useState('');
             const [explanationWork, setExplanationWork] = React.useState('');
- 
+            const [pastedDuringAttempt, setPastedDuringAttempt] = React.useState(false);
+
             const [loading, setLoading] = React.useState(false);
             const [feedback, setFeedback] = React.useState(null);
- 
+
             const [streak, setStreak] = React.useState(0);
-            const [submissionAttempts, setSubmissionAttempts] = React.useState({});
+            const [submissionAttempts, setSubmissionAttempts] = React.useState({}); // keyed by problem id
             const [showComposer, setShowComposer] = React.useState(true);
             const [completedProblemIds, setCompletedProblemIds] = React.useState([]);
- 
+
             const [correctProblemCount, setCorrectProblemCount] = React.useState(0);
             const [performance, setPerformance] = React.useState(null);
+            const [leaderboard, setLeaderboard] = React.useState([]);
             const [error, setError] = React.useState('');
- 
+
             const [studentOverview, setStudentOverview] = React.useState([]);
             const [operatorScope, setOperatorScope] = React.useState('global');
             const [selectedStudent, setSelectedStudent] = React.useState(null);
             const [studentAudit, setStudentAudit] = React.useState([]);
- 
+
             const [addProblemForm, setAddProblemForm] = React.useState({
-                id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: ''
+                id: '', title: '', concept: '', question: '', difficulty: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: ''
             });
             const [addProblemSuccess, setAddProblemSuccess] = React.useState('');
             const [editingProblemId, setEditingProblemId] = React.useState(null);
             const [editProblemForm, setEditProblemForm] = React.useState({
-                title: '', concept: '', question: '', rubric: '', lesson_link: '', url: ''
+                title: '', concept: '', question: '', difficulty: '', rubric: '', lesson_link: '', url: ''
             });
- 
+
             const fetchProblems = () => {
                 return fetch(API_BASE_URL + '/api/problems')
                     .then(res => {
@@ -67,18 +87,41 @@
                         return [];
                     });
             };
- 
+
             React.useEffect(() => {
                 if (view === 'workspace' || view === 'operator_panel') {
                     fetchProblems();
                 }
             }, [view]);
- 
+
+            // Once a student finishes every problem, pull their weak concepts (for study
+            // resources) and the club leaderboard so the completion screen can show both.
+            React.useEffect(() => {
+                if (view !== 'workspace' || problems.length === 0) return;
+                const completedCount = completedProblemIds.filter(id => problems.some(p => p.id === id)).length;
+                const deckFinished = currentQuestionIndex >= problems.length;
+                const courseComplete = completedCount >= problems.length;
+                if (deckFinished && courseComplete) {
+                    fetch(`${API_BASE_URL}/api/student/${studentCode}/performance`)
+                        .then(res => res.json()).then(setPerformance).catch(() => {});
+                    fetch(`${API_BASE_URL}/api/leaderboard`)
+                        .then(res => res.json()).then(data => setLeaderboard(Array.isArray(data) ? data : []))
+                        .catch(() => {});
+                }
+                // eslint-disable-next-line
+            }, [view, problems, currentQuestionIndex, completedProblemIds]);
+
+            const resetComposerFields = () => {
+                setExactAnswer('');
+                setExplanationWork('');
+                setPastedDuringAttempt(false);
+            };
+
             const handleLogin = (e) => {
                 e.preventDefault();
                 setError('');
                 if (!studentCode) return;
- 
+
                 fetch(API_BASE_URL + '/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -86,25 +129,51 @@
                 })
                 .then(res => res.json())
                 .then(data => {
-                    if (data.success) {
-                        setRole(data.role);
-                        if (data.role === 'operator') {
-                            loadOperatorPanel();
-                        } else {
-                            setView('workspace');
-                        }
-                    } else {
+                    if (!data.success) {
                         setError('Invalid access code.');
+                        return;
                     }
+                    setRole(data.role);
+
+                    if (data.role === 'operator') {
+                        loadOperatorPanel();
+                        return;
+                    }
+
+                    // Student login: pull their prior progress so a refresh / re-login
+                    // resumes where they left off instead of resetting the deck.
+                    Promise.all([
+                        fetchProblems(),
+                        fetch(`${API_BASE_URL}/api/student/${studentCode}/progress`)
+                            .then(res => res.json())
+                            .catch(() => ({ completed_problem_ids: [], correct_problem_ids: [], attempts: {} }))
+                    ]).then(([probs, progress]) => {
+                        const completed = progress.completed_problem_ids || [];
+                        setCompletedProblemIds(completed);
+                        setCorrectProblemCount((progress.correct_problem_ids || []).length);
+                        setSubmissionAttempts(progress.attempts || {});
+                        const firstIncomplete = probs.findIndex(p => !completed.includes(p.id));
+                        setCurrentQuestionIndex(firstIncomplete === -1 ? probs.length : firstIncomplete);
+                        setView('workspace');
+                    });
                 })
                 .catch(() => setError('Connection failed.'));
             };
- 
-            const resetComposerFields = () => {
-                setExactAnswer('');
-                setExplanationWork('');
+
+            const handleLogout = () => {
+                setView('login');
+                setStudentCode('');
+                setRole('');
+                setCompletedProblemIds([]);
+                setSubmissionAttempts({});
+                setCorrectProblemCount(0);
+                setCurrentQuestionIndex(0);
+                setFeedback(null);
+                setPerformance(null);
+                setLeaderboard([]);
+                resetComposerFields();
             };
- 
+
             const handleSubmitSolution = () => {
                 if (!exactAnswer.trim() && !explanationWork.trim()) {
                     setError('Enter an answer or explanation before submitting.');
@@ -114,16 +183,17 @@
                 setLoading(true);
                 setFeedback(null);
                 setShowComposer(false);
- 
+
                 const currentProblemId = problems[currentQuestionIndex]?.id;
                 if (!currentProblemId) {
                     setLoading(false);
                     setShowComposer(true);
                     return;
                 }
-                const currentAttemptCount = submissionAttempts[currentQuestionIndex] || 0;
+                const currentAttemptCount = submissionAttempts[currentProblemId] || 0;
                 const nextAttemptCount = currentAttemptCount + 1;
- 
+                const wasPasted = pastedDuringAttempt;
+
                 fetch(API_BASE_URL + '/api/submit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -131,7 +201,8 @@
                         problem_id: currentProblemId,
                         student_code: studentCode,
                         exact_answer: exactAnswer,
-                        explanation: explanationWork
+                        explanation: explanationWork,
+                        is_pasted: wasPasted
                     })
                 })
                 .then(res => res.json())
@@ -140,12 +211,12 @@
                     const gotItRight = score >= 7;
                     const shouldComplete = gotItRight || nextAttemptCount >= MAX_ATTEMPTS;
                     const alreadyCompleted = completedProblemIds.includes(currentProblemId);
- 
+
                     setFeedback(data);
                     setStreak(Number(data.streak ?? 0));
-                    setSubmissionAttempts(prev => ({ ...prev, [currentQuestionIndex]: nextAttemptCount }));
+                    setSubmissionAttempts(prev => ({ ...prev, [currentProblemId]: nextAttemptCount }));
                     setLoading(false);
- 
+
                     if (shouldComplete && !alreadyCompleted) {
                         setCompletedProblemIds(prev => [...prev, currentProblemId]);
                     }
@@ -159,32 +230,22 @@
                     setShowComposer(true);
                 });
             };
- 
+
             const handleTryAgain = () => {
                 setFeedback(null);
                 resetComposerFields();
                 setShowComposer(true);
             };
- 
+
             const loadNextProblem = () => {
                 setError('');
                 setFeedback(null);
                 resetComposerFields();
                 setShowComposer(true);
                 setLoading(false);
- 
-                fetchProblems().then((data) => {
-                    if (!Array.isArray(data) || data.length === 0) {
-                        setCurrentQuestionIndex(0);
-                        return;
-                    }
-                    setCurrentQuestionIndex((prev) => {
-                        const nextIndex = prev + 1;
-                        return nextIndex >= data.length ? data.length : nextIndex;
-                    });
-                });
+                setCurrentQuestionIndex((prev) => Math.min(prev + 1, problems.length));
             };
- 
+
             const jumpToQuestion = (index) => {
                 setError('');
                 setFeedback(null);
@@ -192,7 +253,7 @@
                 setShowComposer(true);
                 setCurrentQuestionIndex(index);
             };
- 
+
             const loadDashboard = () => {
                 fetch(API_BASE_URL + '/api/student/' + studentCode + '/performance')
                     .then(res => res.json())
@@ -202,7 +263,7 @@
                     })
                     .catch(() => setError('Failed to load dashboard.'));
             };
- 
+
             const loadOperatorPanel = () => {
                 fetch(API_BASE_URL + '/api/operator/students')
                     .then(res => res.json())
@@ -212,17 +273,17 @@
                     })
                     .catch(() => setError('Failed to load telemetry dashboard.'));
             };
- 
+
             const loadStudentAudit = (studentId) => {
                 fetch(`${API_BASE_URL}/api/admin/submissions/${studentId}`)
                     .then(res => res.json())
                     .then(data => setStudentAudit(Array.isArray(data) ? data : []))
                     .catch(() => setStudentAudit([]));
             };
- 
+
             const handleDeleteProblem = (id) => {
                 if (!confirm(`Are you sure you want to delete problem "${id}"? This is irreversible.`)) return;
- 
+
                 fetch(`${API_BASE_URL}/api/problems/${id}`, { method: 'DELETE' })
                 .then(res => res.json())
                 .then(() => {
@@ -231,7 +292,7 @@
                 })
                 .catch(() => setError('Failed to delete problem.'));
             };
- 
+
             const handleAddProblemSubmit = (e) => {
                 e.preventDefault();
                 setLoading(true);
@@ -247,7 +308,7 @@
                 })
                 .then(() => {
                     setAddProblemSuccess('Problem added!');
-                    setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' });
+                    setAddProblemForm({ id: '', title: '', concept: '', question: '', difficulty: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' });
                     setLoading(false);
                     fetchProblems();
                 })
@@ -256,19 +317,20 @@
                     setLoading(false);
                 });
             };
- 
+
             const startEditingProblem = (problem) => {
                 setEditingProblemId(problem.id);
                 setEditProblemForm({
                     title: problem.title || '',
                     concept: problem.concept || '',
                     question: problem.question || '',
+                    difficulty: problem.difficulty || '',
                     rubric: problem.rubric || '',
                     lesson_link: problem.lesson_link || '',
                     url: problem.url || ''
                 });
             };
- 
+
             const handleUpdateProblem = (e, problemId) => {
                 e.preventDefault();
                 setLoading(true);
@@ -289,7 +351,19 @@
                     setLoading(false);
                 });
             };
- 
+
+            const handleResetAllData = () => {
+                if (!confirm('This permanently deletes all submission history, streaks, and student progress. This is meant for testing only. Continue?')) return;
+                fetch(API_BASE_URL + '/api/admin/reset', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(() => {
+                        setStudentAudit([]);
+                        setSelectedStudent(null);
+                        loadOperatorPanel();
+                    })
+                    .catch(() => setError('Failed to reset data.'));
+            };
+
             // ---- ANALYTICS ENGINES FOR OPERATOR SCOPES ----
             const computeGlobalMetrics = () => {
                 let totalSub = 0, cSum = 0, eSum = 0, jSum = 0;
@@ -309,7 +383,55 @@
                     j: (jSum / totalSub).toFixed(1)
                 };
             };
- 
+
+            const computeConceptMetrics = () => {
+                const map = {};
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        const prob = problems.find(p => p.id === sub.problem_id);
+                        const concept = prob ? prob.concept : "Unknown";
+                        if (!map[concept]) map[concept] = { total: 0, score: 0 };
+                        map[concept].total++;
+                        map[concept].score += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                    });
+                });
+                return Object.entries(map)
+                    .map(([name, v]) => ({ name, avg: (v.score / v.total).toFixed(1), total: v.total }))
+                    .sort((a, b) => Number(a.avg) - Number(b.avg));
+            };
+
+            const computeDifficultyMetrics = () => {
+                const map = {};
+                studentOverview.forEach(s => {
+                    s.submissions.forEach(sub => {
+                        const prob = problems.find(p => p.id === sub.problem_id);
+                        const difficulty = (prob && prob.difficulty) ? prob.difficulty : "Untagged";
+                        if (!map[difficulty]) map[difficulty] = { total: 0, score: 0 };
+                        map[difficulty].total++;
+                        map[difficulty].score += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                    });
+                });
+                const order = { Easy: 0, Medium: 1, Hard: 2, Untagged: 3 };
+                return Object.entries(map)
+                    .map(([name, v]) => ({ name, avg: (v.score / v.total).toFixed(1), total: v.total }))
+                    .sort((a, b) => (order[a.name] ?? 9) - (order[b.name] ?? 9));
+            };
+
+            const computeWeakestProblems = () => {
+                return problems.map(p => {
+                    let total = 0, sum = 0;
+                    studentOverview.forEach(s => {
+                        s.submissions.forEach(sub => {
+                            if (sub.problem_id === p.id) {
+                                total++;
+                                sum += (sub.correctness_score + sub.explanation_score + sub.rigor_score) / 3;
+                            }
+                        });
+                    });
+                    return { ...p, totalSubmissions: total, avgScore: total > 0 ? sum / total : null };
+                }).filter(p => p.totalSubmissions > 0).sort((a, b) => a.avgScore - b.avgScore).slice(0, 6);
+            };
+
             const computeStudentAverage = (student) => {
                 if (!student.submissions || student.submissions.length === 0) {
                     return '0.0';
@@ -319,7 +441,7 @@
                 }, 0);
                 return (total / student.submissions.length).toFixed(1);
             };
- 
+
             const globalData = computeGlobalMetrics();
             const currentProblem = problems[currentQuestionIndex] || null;
             const completedCount = completedProblemIds.filter(id => problems.some(problem => problem.id === id)).length;
@@ -329,10 +451,27 @@
             const incompleteIndices = problems.length > 0
                 ? problems.map((problem, index) => completedProblemIds.includes(problem.id) ? null : index).filter(index => index !== null)
                 : [];
-            const currentAttemptCount = submissionAttempts[currentQuestionIndex] || 0;
+            const currentAttemptCount = currentProblem ? (submissionAttempts[currentProblem.id] || 0) : 0;
             const showFullFeedback = Boolean(feedback) && (Number(feedback.correctness_score ?? 0) >= 7 || currentAttemptCount >= MAX_ATTEMPTS);
             const accuracyRate = problems.length > 0 ? ((correctProblemCount / problems.length) * 100).toFixed(1) : '0.0';
- 
+
+            const weakConcepts = performance && performance.averages
+                ? Object.entries(performance.averages).filter(([, avg]) => Number(avg) < 7)
+                : [];
+            const studyResourceLinks = (() => {
+                if (!weakConcepts.length) return [];
+                const concepts = new Set(weakConcepts.map(([c]) => c));
+                const seen = new Set();
+                const links = [];
+                problems.forEach(p => {
+                    if (!concepts.has(p.concept)) return;
+                    if (p.lesson_link && !seen.has(p.lesson_link)) { seen.add(p.lesson_link); links.push({ concept: p.concept, label: 'Lesson', url: p.lesson_link }); }
+                    if (p.url && !seen.has(p.url)) { seen.add(p.url); links.push({ concept: p.concept, label: 'Practice', url: p.url }); }
+                });
+                return links;
+            })();
+            const myLeaderboardRank = leaderboard.findIndex(entry => entry.student_code === studentCode) + 1;
+
             return (
                 <div className="min-h-screen bg-zinc-950 text-zinc-100">
                     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 lg:p-6">
@@ -357,7 +496,7 @@
                                 )}
                             </div>
                         </header>
- 
+
                         {view !== 'login' && (
                             <div className="flex flex-wrap gap-2">
                                 <button onClick={() => setView('workspace')} className={`rounded-full px-3 py-1.5 text-sm ${view === 'workspace' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>
@@ -373,14 +512,14 @@
                                         Control Room
                                     </button>
                                 )}
-                                <button onClick={() => { setView('login'); setStudentCode(''); setRole(''); }} className="rounded-full bg-zinc-800 px-3 py-1.5 text-sm text-red-400 hover:text-red-300">
+                                <button onClick={handleLogout} className="rounded-full bg-zinc-800 px-3 py-1.5 text-sm text-red-400 hover:text-red-300">
                                     Logout
                                 </button>
                             </div>
                         )}
- 
+
                         {error && <div className="rounded-xl border border-red-500/40 bg-red-900/40 p-3 text-sm text-red-200">{error}</div>}
- 
+
                         {view === 'login' && (
                             <div className="mx-auto mt-10 w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
                                 <h2 className="mb-2 text-lg font-semibold">Enter Access Code</h2>
@@ -396,8 +535,8 @@
                                 </form>
                             </div>
                         )}
- 
-                        {view === 'workspace' && problems.length > 0 && isCourseComplete && (
+
+                        {view === 'workspace' && problems.length > 0 && deckFinished && isCourseComplete && (
                             <div className="rounded-2xl border border-emerald-700/40 bg-zinc-900 p-6 text-center">
                                 <h2 className="mb-3 text-2xl font-semibold text-emerald-300">Congratulations! You've finished every problem in the deck.</h2>
                                 <p className="mb-4 text-sm text-zinc-400">Great work staying with it to the end.</p>
@@ -412,9 +551,40 @@
                                         <div className="text-lg font-semibold text-zinc-100">{completedCount}/{problems.length}</div>
                                     </div>
                                 </div>
+
+                                {studyResourceLinks.length > 0 && (
+                                    <div className="mx-auto mt-6 max-w-lg text-left">
+                                        <h3 className="mb-1 text-sm font-semibold text-zinc-300">Recommended Study Resources</h3>
+                                        <p className="mb-3 text-xs text-zinc-500">Based on the concepts where your scores were lowest.</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {studyResourceLinks.map((link, i) => (
+                                                <a key={i} href={link.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center rounded-full border border-indigo-600/30 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-300 hover:bg-indigo-500/20">
+                                                    {link.concept} — {link.label} ↗
+                                                </a>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {leaderboard.length > 0 && (
+                                    <div className="mx-auto mt-6 max-w-lg text-left">
+                                        <h3 className="mb-2 text-sm font-semibold text-zinc-300">Club Leaderboard</h3>
+                                        <div className="overflow-hidden rounded-xl border border-zinc-800">
+                                            {leaderboard.slice(0, 5).map((entry, i) => (
+                                                <div key={entry.student_code} className={`flex items-center justify-between px-3 py-2 text-sm ${entry.student_code === studentCode ? 'bg-indigo-900/30' : ''} ${i > 0 ? 'border-t border-zinc-800' : ''}`}>
+                                                    <span className="text-zinc-300">#{i + 1} {entry.student_code}{entry.student_code === studentCode ? ' (you)' : ''}</span>
+                                                    <span className="font-semibold text-indigo-300">{entry.avg_score}/10</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {myLeaderboardRank > 5 && (
+                                            <div className="mt-2 text-xs text-zinc-500">You're ranked #{myLeaderboardRank} of {leaderboard.length}.</div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         )}
- 
+
                         {view === 'workspace' && problems.length > 0 && deckFinished && !isCourseComplete && (
                             <div className="rounded-2xl border border-amber-700/40 bg-zinc-900 p-6 text-center">
                                 <h2 className="mb-3 text-2xl font-semibold text-amber-300">
@@ -429,14 +599,17 @@
                                 </div>
                             </div>
                         )}
- 
-                        {view === 'workspace' && problems.length > 0 && !deckFinished && !isCourseComplete && (
+
+                        {view === 'workspace' && problems.length > 0 && !deckFinished && (
                             <div className="space-y-4">
                                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
                                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                                        <span className="rounded-full border border-indigo-700 bg-indigo-900/60 px-3 py-1 text-xs font-medium text-indigo-300">
-                                            {currentProblem?.concept}
-                                        </span>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="rounded-full border border-indigo-700 bg-indigo-900/60 px-3 py-1 text-xs font-medium text-indigo-300">
+                                                {currentProblem?.concept}
+                                            </span>
+                                            <DifficultyBadge difficulty={currentProblem?.difficulty} />
+                                        </div>
                                         <span className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-400">
                                             {Math.min(currentQuestionIndex + 1, problems.length)} / {problems.length} · {remainingQuestions} remaining
                                         </span>
@@ -454,7 +627,7 @@
                                         </div>
                                     )}
                                 </div>
- 
+
                                 {showComposer && (
                                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
                                         <div className="space-y-3">
@@ -466,6 +639,7 @@
                                                     placeholder="Enter the final answer (e.g., 24)"
                                                     value={exactAnswer}
                                                     onChange={(e) => setExactAnswer(e.target.value)}
+                                                    onPaste={() => setPastedDuringAttempt(true)}
                                                     className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white focus:outline-none focus:border-indigo-500"
                                                 />
                                             </div>
@@ -477,10 +651,14 @@
                                                     placeholder="Write your step-by-step reasoning here..."
                                                     value={explanationWork}
                                                     onChange={(e) => setExplanationWork(e.target.value)}
+                                                    onPaste={() => setPastedDuringAttempt(true)}
                                                     className="w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 font-mono text-sm text-white focus:outline-none"
                                                 />
                                             </div>
-                                            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                                <span className="text-xs text-amber-400">
+                                                    {pastedDuringAttempt ? '📋 Paste detected — this attempt will be flagged for your operator to review.' : ''}
+                                                </span>
                                                 <button onClick={handleSubmitSolution} disabled={loading} className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium transition hover:bg-indigo-700 disabled:opacity-50">
                                                     {loading ? 'Submitting...' : 'Submit Solution'}
                                                 </button>
@@ -488,14 +666,14 @@
                                         </div>
                                     </div>
                                 )}
- 
+
                                 {!showComposer && loading && (
                                     <div className="flex items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">
                                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-indigo-500"></span>
                                         Grading your work...
                                     </div>
                                 )}
- 
+
                                 {feedback && !showFullFeedback && (
                                     <div className="rounded-2xl border border-amber-700/40 bg-amber-950/20 p-4">
                                         <div className="mb-2 text-sm font-semibold text-amber-200">Not quite — you have one more try</div>
@@ -510,13 +688,13 @@
                                         </div>
                                     </div>
                                 )}
- 
+
                                 {feedback && showFullFeedback && (() => {
                                     const isCorrect = Number(feedback.correctness_score ?? 0) >= 7;
                                     const cardClasses = isCorrect
                                         ? "rounded-2xl border border-emerald-700/40 bg-emerald-950/30 p-4"
                                         : "rounded-2xl border border-red-700/40 bg-red-950/30 p-4";
- 
+
                                     return (
                                         <div className={cardClasses}>
                                             <div className={`mb-2 text-sm font-semibold ${isCorrect ? 'text-emerald-200' : 'text-red-200'}`}>
@@ -581,7 +759,7 @@
                                 })()}
                             </div>
                         )}
- 
+
                         {view === 'dashboard' && role === 'student' && (
                             <div className="space-y-4">
                                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
@@ -612,20 +790,21 @@
                                 </div>
                             </div>
                         )}
- 
+
                         {view === 'operator_panel' && (
                             <div className="space-y-4">
                                 <div className="flex flex-wrap gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 p-2">
                                     <button onClick={() => setOperatorScope('global')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'global' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Overview</button>
+                                    <button onClick={() => setOperatorScope('metrics')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'metrics' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>All Metrics</button>
                                     <button onClick={() => setOperatorScope('questions')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'questions' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Questions</button>
                                     <button onClick={() => setOperatorScope('students')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'students' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Students</button>
                                     <button onClick={() => setOperatorScope('add_problems')} className={`rounded-full px-3 py-1.5 text-sm ${operatorScope === 'add_problems' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}>Add</button>
                                 </div>
- 
+
                                 {operatorScope === 'global' && (
                                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
                                         <h2 className="mb-2 text-xl font-semibold">Global Performance</h2>
-                                        <p className="mb-4 text-sm text-zinc-400">A compact view of aggregate scoring across all submissions. Use this to spot which skill needs meeting time.</p>
+                                        <p className="mb-4 text-sm text-zinc-400">A compact view of aggregate scoring across all submissions. See "All Metrics" for the concept-by-concept breakdown.</p>
                                         <div className="grid gap-3 sm:grid-cols-4">
                                             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-center">
                                                 <div className="text-2xl font-black text-indigo-400">{globalData.combined}/10</div>
@@ -646,7 +825,106 @@
                                         </div>
                                     </div>
                                 )}
- 
+
+                                {operatorScope === 'metrics' && (
+                                    <div className="space-y-4">
+                                        <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+                                            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                                                <div>
+                                                    <h2 className="text-xl font-semibold">All Metrics</h2>
+                                                    <p className="text-sm text-zinc-400">How every student is doing, broken down by concept and difficulty.</p>
+                                                </div>
+                                                <a href={`${API_BASE_URL}/api/admin/export/csv`} className="rounded-lg border border-indigo-600/40 bg-indigo-500/10 px-3 py-1.5 text-sm text-indigo-300 hover:bg-indigo-500/20">
+                                                    Export CSV
+                                                </a>
+                                            </div>
+
+                                            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">By Concept — weakest first</h3>
+                                            <div className="mb-6 overflow-x-auto rounded-xl border border-zinc-800">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-zinc-950 text-xs uppercase text-zinc-500">
+                                                        <tr>
+                                                            <th className="px-3 py-2 text-left">Concept</th>
+                                                            <th className="px-3 py-2 text-right">Avg Score</th>
+                                                            <th className="px-3 py-2 text-right">Submissions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {computeConceptMetrics().length === 0 && (
+                                                            <tr><td colSpan="3" className="px-3 py-3 text-center text-zinc-500">No submissions yet.</td></tr>
+                                                        )}
+                                                        {computeConceptMetrics().map(row => (
+                                                            <tr key={row.name} className="border-t border-zinc-800">
+                                                                <td className="px-3 py-2 text-zinc-200">{row.name}</td>
+                                                                <td className={`px-3 py-2 text-right font-semibold ${Number(row.avg) < 7 ? 'text-amber-400' : 'text-emerald-400'}`}>{row.avg}/10</td>
+                                                                <td className="px-3 py-2 text-right text-zinc-400">{row.total}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">By Difficulty</h3>
+                                            <div className="mb-6 overflow-x-auto rounded-xl border border-zinc-800">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-zinc-950 text-xs uppercase text-zinc-500">
+                                                        <tr>
+                                                            <th className="px-3 py-2 text-left">Difficulty</th>
+                                                            <th className="px-3 py-2 text-right">Avg Score</th>
+                                                            <th className="px-3 py-2 text-right">Submissions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {computeDifficultyMetrics().length === 0 && (
+                                                            <tr><td colSpan="3" className="px-3 py-3 text-center text-zinc-500">No submissions yet.</td></tr>
+                                                        )}
+                                                        {computeDifficultyMetrics().map(row => (
+                                                            <tr key={row.name} className="border-t border-zinc-800">
+                                                                <td className="px-3 py-2 text-zinc-200">{row.name}</td>
+                                                                <td className="px-3 py-2 text-right font-semibold text-indigo-300">{row.avg}/10</td>
+                                                                <td className="px-3 py-2 text-right text-zinc-400">{row.total}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Weakest Problems</h3>
+                                            <div className="overflow-x-auto rounded-xl border border-zinc-800">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-zinc-950 text-xs uppercase text-zinc-500">
+                                                        <tr>
+                                                            <th className="px-3 py-2 text-left">Problem</th>
+                                                            <th className="px-3 py-2 text-left">Concept</th>
+                                                            <th className="px-3 py-2 text-right">Avg Score</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {computeWeakestProblems().length === 0 && (
+                                                            <tr><td colSpan="3" className="px-3 py-3 text-center text-zinc-500">No submissions yet.</td></tr>
+                                                        )}
+                                                        {computeWeakestProblems().map(row => (
+                                                            <tr key={row.id} className="border-t border-zinc-800">
+                                                                <td className="px-3 py-2 text-zinc-200">{row.title}</td>
+                                                                <td className="px-3 py-2 text-zinc-400">{row.concept}</td>
+                                                                <td className="px-3 py-2 text-right font-semibold text-amber-400">{row.avgScore.toFixed(1)}/10</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-2xl border border-red-800/40 bg-red-950/10 p-4">
+                                            <h3 className="mb-1 text-sm font-semibold text-red-300">Danger Zone</h3>
+                                            <p className="mb-3 text-xs text-zinc-400">Wipes all submission history, streaks, and student progress. Use this for testing only — it can't be undone.</p>
+                                            <button onClick={handleResetAllData} className="rounded-lg border border-red-600/40 bg-red-500/10 px-4 py-2 text-sm text-red-300 hover:bg-red-500/20">
+                                                Reset All Testing Data
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {operatorScope === 'questions' && (
                                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
                                         <div className="space-y-3">
@@ -661,6 +939,15 @@
                                                             <div>
                                                                 <label className="mb-1 block text-xs text-zinc-400">Concept</label>
                                                                 <input value={editProblemForm.concept} onChange={(e) => setEditProblemForm({...editProblemForm, concept: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="mb-1 block text-xs text-zinc-400">Difficulty</label>
+                                                                <select value={editProblemForm.difficulty} onChange={(e) => setEditProblemForm({...editProblemForm, difficulty: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm">
+                                                                    <option value="">No difficulty</option>
+                                                                    <option value="Easy">Easy</option>
+                                                                    <option value="Medium">Medium</option>
+                                                                    <option value="Hard">Hard</option>
+                                                                </select>
                                                             </div>
                                                             <div>
                                                                 <label className="mb-1 block text-xs text-zinc-400">Question</label>
@@ -690,7 +977,10 @@
                                                             <div>
                                                                 <h3 className="font-semibold text-zinc-200">{problem.title}</h3>
                                                                 <p className="mt-1 text-sm text-zinc-400">{problem.question}</p>
-                                                                <p className="mt-2 text-xs text-indigo-400">{problem.concept}</p>
+                                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                                    <span className="text-xs text-indigo-400">{problem.concept}</span>
+                                                                    <DifficultyBadge difficulty={problem.difficulty} />
+                                                                </div>
                                                             </div>
                                                             <div className="flex gap-2">
                                                                 <button onClick={() => startEditingProblem(problem)} className="text-sm text-indigo-400 hover:text-indigo-200">Edit</button>
@@ -703,7 +993,7 @@
                                         </div>
                                     </div>
                                 )}
- 
+
                                 {operatorScope === 'students' && (
                                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
                                         <div className="space-y-3">
@@ -724,7 +1014,7 @@
                                         </div>
                                     </div>
                                 )}
- 
+
                                 {operatorScope === 'add_problems' && (
                                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
                                         <h2 className="mb-2 text-xl font-semibold">Add New Problem</h2>
@@ -733,6 +1023,12 @@
                                             <input type="text" placeholder="Problem ID" value={addProblemForm.id} onChange={(e) => setAddProblemForm({...addProblemForm, id: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <input type="text" placeholder="Title" value={addProblemForm.title} onChange={(e) => setAddProblemForm({...addProblemForm, title: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <input type="text" placeholder="Concept" value={addProblemForm.concept} onChange={(e) => setAddProblemForm({...addProblemForm, concept: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
+                                            <select value={addProblemForm.difficulty} onChange={(e) => setAddProblemForm({...addProblemForm, difficulty: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3">
+                                                <option value="">No difficulty</option>
+                                                <option value="Easy">Easy</option>
+                                                <option value="Medium">Medium</option>
+                                                <option value="Hard">Hard</option>
+                                            </select>
                                             <textarea placeholder="Question" value={addProblemForm.question} onChange={(e) => setAddProblemForm({...addProblemForm, question: e.target.value})} rows="4" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <input type="text" placeholder="Official Answer" value={addProblemForm.official_answer} onChange={(e) => setAddProblemForm({...addProblemForm, official_answer: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <input type="text" placeholder="Image URL (optional)" value={addProblemForm.image_url} onChange={(e) => setAddProblemForm({...addProblemForm, image_url: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
@@ -740,7 +1036,7 @@
                                             <input type="text" placeholder="Practice URL (optional)" value={addProblemForm.url} onChange={(e) => setAddProblemForm({...addProblemForm, url: e.target.value})} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <textarea placeholder="Reference solution / rubric" value={addProblemForm.reference_solution} onChange={(e) => setAddProblemForm({...addProblemForm, reference_solution: e.target.value})} rows="6" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3" />
                                             <div className="flex justify-between gap-2">
-                                                <button type="button" onClick={() => setAddProblemForm({ id: '', title: '', concept: '', question: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' })} className="text-sm text-zinc-400 hover:text-white">Clear</button>
+                                                <button type="button" onClick={() => setAddProblemForm({ id: '', title: '', concept: '', question: '', difficulty: '', official_answer: '', image_url: '', reference_solution: '', lesson_link: '', url: '' })} className="text-sm text-zinc-400 hover:text-white">Clear</button>
                                                 <button type="submit" disabled={loading} className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium transition hover:bg-indigo-700 disabled:opacity-50">
                                                     {loading ? 'Adding...' : 'Add Problem'}
                                                 </button>
@@ -749,7 +1045,7 @@
                                         </form>
                                     </div>
                                 )}
- 
+
                                 {operatorScope === 'student_detail' && selectedStudent && (
                                     <div className="space-y-4">
                                         <button onClick={() => setOperatorScope('students')} className="text-sm text-indigo-400 hover:text-indigo-200">← Back to students</button>
@@ -763,7 +1059,12 @@
                                                     {studentAudit.map((entry, index) => (
                                                         <div key={index} className="mb-3 border-b border-zinc-800 pb-3 last:border-b-0">
                                                             <div className="flex items-start justify-between gap-2">
-                                                                <div className="font-medium text-zinc-100">[{entry.problem_id}] — Answer: "{entry.exact_answer}"</div>
+                                                                <div className="font-medium text-zinc-100">
+                                                                    [{entry.problem_id}] — Answer: "{entry.exact_answer}"
+                                                                    {entry.is_pasted && (
+                                                                        <span className="ml-2 rounded-full border border-amber-600/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-300">📋 Pasted</span>
+                                                                    )}
+                                                                </div>
                                                                 {entry.timestamp && (
                                                                     <span className="shrink-0 text-xs text-zinc-500">{new Date(entry.timestamp * 1000).toLocaleString()}</span>
                                                                 )}
@@ -823,10 +1124,9 @@
                 </div>
             );
         }
- 
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
 </html>
- 
