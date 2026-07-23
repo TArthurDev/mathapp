@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: mathclub-tracker-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: HF_TOKEN
+        sync: false
+      - key: HF_MODEL
+        value: meta-llama/Llama-3.3-70B-Instruct
